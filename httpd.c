@@ -14,8 +14,20 @@
 #define TRUE   1
 #define FALSE  0
 
-#if MHD_VERSION < 0x00097002
+#if MHD_VERSION < 0x00097100
 enum MHD_Result { DUMMY };
+#define MHD_RESULT int
+#else
+#define MHD_RESULT enum MHD_Result
+#endif
+
+#if MHD_VERSION < 0x00095300
+#define MHD_HTTP_PAYLOAD_TOO_LARGE MHD_HTTP_REQUEST_ENTITY_TOO_LARGE
+#endif
+
+#if MHD_VERSION < 0x00093400
+typedef int MHD_socket;
+#define MHD_INVALID_SOCKET (-1)
 #endif
 
 struct request {
@@ -313,7 +325,7 @@ static int httpd_base64_decode(const char *input, BIO *bp)
     return 0;
 }
 
-static enum MHD_Result httpd_handler(
+static MHD_RESULT httpd_handler(
         void *cls,
         struct MHD_Connection *connection,
         const char *url,
@@ -514,15 +526,13 @@ struct httpd *httpd_new(uint16_t port, httpd_handler_t handler, void *context)
 
 int httpd_start(struct httpd *httpd)
 {
-    const unsigned int flags = MHD_USE_DUAL_STACK
-                             | MHD_USE_ERROR_LOG
-                             | MHD_USE_AUTO;
+    const unsigned int flags = MHD_USE_DUAL_STACK;
 
     httpd->daemon = MHD_start_daemon(
             flags, httpd->port, NULL, NULL,
-            (MHD_AccessHandlerCallback)&httpd_handler, httpd,
+            httpd_handler, httpd,
             MHD_OPTION_NOTIFY_COMPLETED,
-            &httpd_completed, httpd,
+            httpd_completed, httpd,
             MHD_OPTION_END);
 
     if (!httpd->daemon) {
@@ -558,7 +568,7 @@ int httpd_poll(struct httpd *httpd, sigset_t *sigset)
         return 0;
     }
 
-    if (MHD_run(httpd->daemon) != MHD_YES) {
+    if (MHD_run_from_select(httpd->daemon, &rset, &wset, &eset) != MHD_YES) {
         return -1;
     }
 

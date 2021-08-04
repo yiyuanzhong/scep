@@ -5,12 +5,19 @@
 #include <unistd.h>
 
 #include <openssl/bio.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
 #include <openssl/x509.h>
 
 #include <microhttpd.h>
 
 #include "httpd.h"
 #include "scep.h"
+
+#ifndef static_assert
+#define static_assert(x) _Static_assert((x), #x)
+#endif
 
 struct context {
     int allow_exposed_challenge_password;
@@ -19,6 +26,13 @@ struct context {
     long validity_days;
     struct scep *scep;
 };
+
+struct token {
+    uint32_t timestamp;
+    uint32_t nonce;
+    unsigned char hmac[32];
+};
+static_assert(sizeof(struct token) == 40);
 
 static volatile sig_atomic_t g_quit;
 
@@ -71,48 +85,292 @@ static int validate_validity(const X509 *x509, long days)
     }
 
     return 1;
- }
+}
+
+static void hex(const void *input, size_t inlen, char *output)
+{
+    static const char H[] = "0123456789ABCDEF";
+    const unsigned char *p;
+    size_t i;
+
+    p = (const unsigned char *)input;
+    for (i = 0; i < inlen; ++i) {
+        output[i * 2 + 0] = H[p[i] / 16];
+        output[i * 2 + 1] = H[p[i] % 16];
+    }
+}
+
+static int unhex_one(const char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    } else if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    } else if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    } else {
+        return -1;
+    }
+}
+
+static int unhex(const void *input, size_t inlen, void *output)
+{
+    unsigned char *o;
+    const char *p;
+    size_t i;
+    int h;
+    int l;
+
+    if (inlen % 2) {
+        return -1;
+    }
+
+    p = (const char *)input;
+    o = (unsigned char *)output;
+    for (i = 0; i < inlen; i += 2) {
+        h = unhex_one(p[i + 0]);
+        l = unhex_one(p[i + 1]);
+        if (h < 0 || l < 0) {
+            return -1;
+        }
+
+        *o++ = (unsigned char)(h * 16 + l);
+    }
+
+    return 0;
+}
+
+static int parse_name(X509_NAME *name, char *subject, int strict)
+{
+    char *value;
+    int escape;
+    char *key;
+    char *q;
+    char *p;
+
+    p = subject;
+    if (*p++ != '/') {
+        return -1;
+    }
+
+    for (;;) {
+        key = strsep(&p, "=");
+        if (!key || !p) {
+            return -1;
+        }
+
+        for (value = q = p, escape = 0; *p; ++p) {
+            if (escape) {
+                *q++ = *p;
+                escape = 0;
+
+            } else if (*p == '/') {
+                break;
+
+            } else if (*p == '\\') {
+                if (escape || !p[1]) {
+                    return -1;
+                }
+                escape = 1;
+
+            } else {
+                *q++ = *p;
+            }
+        }
+
+        if (!*key || !*value) {
+            if (strict) {
+                return -1;
+            }
+
+            continue;
+        }
+
+        if (X509_NAME_add_entry_by_txt(name, key, MBSTRING_ASC,
+                (unsigned char *)value, q - value, -1, 0) != 1) {
+
+            return -1;
+        }
+
+        if (*p) {
+            ++p;
+        } else {
+            break;
+        }
+    }
+
+    return 0;
+}
+
+static int hash(const EVP_MD *md, const char *what, unsigned char *output)
+{
+    unsigned int hlen;
+    EVP_MD_CTX *ctx;
+    size_t length;
+
+    ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        return -1;
+    }
+
+    length = strlen(what);
+    if (EVP_DigestInit_ex(ctx, md, NULL) != 1       ||
+        EVP_DigestUpdate(ctx, what, length) != 1    ||
+        EVP_DigestFinal_ex(ctx, output, &hlen) != 1 ){
+
+        EVP_MD_CTX_free(ctx);
+        return -1;
+    }
+
+    EVP_MD_CTX_free(ctx);
+    return 0;
+}
+
+static int generate_challenge_password(
+        const char *secret,
+        time_t timestamp,
+        uint32_t nonce,
+        const X509_NAME *name,
+        char *output)
+{
+    unsigned char key[SHA256_DIGEST_LENGTH];
+    struct token token;
+    unsigned int hlen;
+    BUF_MEM *bptr;
+    HMAC_CTX *ctx;
+    BIO *bp;
+
+    if (hash(EVP_sha256(), secret, key)) {
+        return -1;
+    }
+
+    ctx = HMAC_CTX_new();
+    if (!ctx) {
+        return -1;
+    }
+
+    bp = BIO_new(BIO_s_mem());
+    if (!bp) {
+        HMAC_CTX_free(ctx);
+        return -1;
+    }
+
+    if (X509_NAME_print_ex(bp, name, 0, XN_FLAG_RFC2253) == -1) {
+        BIO_free_all(bp);
+        HMAC_CTX_free(ctx);
+        return -1;
+    }
+
+    BIO_get_mem_ptr(bp, &bptr);
+    memset(&token, 0, sizeof(token));
+    token.timestamp = timestamp;
+    token.nonce = nonce;
+
+    if (HMAC_Init_ex(ctx, key, sizeof(key), EVP_sha256(), NULL) != 1          ||
+        HMAC_Update(ctx, (unsigned char *)&timestamp, sizeof(timestamp)) != 1 ||
+        HMAC_Update(ctx, (unsigned char *)&nonce, sizeof(nonce)) != 1         ||
+        HMAC_Update(ctx, (unsigned char *)bptr->data, bptr->length) != 1      ||
+        HMAC_Final(ctx, token.hmac, &hlen) != 1                               ){
+
+        HMAC_CTX_free(ctx);
+        BIO_free_all(bp);
+        return -1;
+    }
+
+    HMAC_CTX_free(ctx);
+    BIO_free_all(bp);
+
+    hex(&token, sizeof(token), output);
+    output[sizeof(token) * 2] = '\0';
+    return 0;
+}
+
+static int generate_challenge_password_from_subject(
+        const char *secret,
+        uint32_t timestamp,
+        uint32_t nonce,
+        const char *subject,
+        char *output)
+{
+    X509_NAME *name;
+    char *copy;
+
+    copy = strdup(subject);
+    if (!copy) {
+        return -1;
+    }
+
+    name = X509_NAME_new();
+    if (!name) {
+        free(copy);
+        return -1;
+    }
+
+    if (parse_name(name, copy, 1)) {
+        X509_NAME_free(name);
+        free(copy);
+        return -1;
+    }
+
+    free(copy);
+    if (generate_challenge_password(secret, timestamp, nonce, name, output)) {
+        X509_NAME_free(name);
+        return -1;
+    }
+
+    X509_NAME_free(name);
+    return 0;
+}
 
 static int validate_cp(
         struct context *ctx,
         const X509_REQ *csr,
         const ASN1_PRINTABLESTRING *cp)
 {
+    static const uint32_t kValid = 604800; /* 7 days */
+
+    char output[sizeof(struct token) * 2 + 1];
     const X509_NAME *subject;
-    BUF_MEM *bptr;
-    size_t len;
-    BIO *bp;
-    int ret;
+    struct token token;
+    uint32_t timestamp;
+    time_t now;
 
     if (!ctx->challenge_password || !*ctx->challenge_password) {
         fprintf(stderr, "DEBUG: no challenge succeeded\n");
         return 1;
     }
 
+    if (cp->length != sizeof(token) * 2) {
+        return 0;
+    }
+
+    if (unhex(cp->data, cp->length, &token)) {
+        return 0;
+    }
+
     subject = X509_REQ_get_subject_name(csr);
-    bp = BIO_new(BIO_s_mem());
-    if (!bp) {
+    if (generate_challenge_password(ctx->challenge_password,
+            token.timestamp, token.nonce, subject, output)) {
+
         return -1;
     }
 
-    if (X509_NAME_print_ex(bp, subject, 0, XN_FLAG_RFC2253) == -1) {
-        BIO_free_all(bp);
+    if (memcmp(output, cp->data, sizeof(token) * 2)) {
+        return 0;
+    }
+
+    now = time(NULL);
+    if (now > UINT32_MAX) { /* Ahh? */
         return -1;
     }
 
-    BIO_get_mem_ptr(bp, &bptr);
-
-    ret = 0;
-    len = strlen(ctx->challenge_password);
-    if ((size_t)cp->length == len                           &&
-        memcmp(cp->data, ctx->challenge_password, len) == 0 ){
-
-        fprintf(stderr, "DEBUG: good challenge succeeded\n");
-        ret = 1;
+    timestamp = (uint32_t)now;
+    if (token.timestamp > timestamp || timestamp - token.timestamp > kValid) {
+        return 0;
     }
 
-    BIO_free_all(bp);
-    return ret;
+    fprintf(stderr, "DEBUG: good challenge succeeded\n");
+    return 1;
 }
 
 static int validate_subject(const X509_REQ *csr, const X509 *signer)
@@ -140,8 +398,8 @@ static int validate(
     int ret;
 
     /* The idea is to check subject and SAN together with challenge password,
-     * but since I haven't implemented authenticated challenge passwords the
-     * two fields are not checked at all */
+     * but since I haven't implemented authenticated challenge passwords for
+     * SAN, only subject is being checked */
 
     if (cp) {
         ret = validate_cp(ctx, csr, cp);
@@ -386,6 +644,35 @@ static int atoform(const char *s, int *f)
     }
 }
 
+static int main_generate(const char *subject, const char *key)
+{
+    char output[sizeof(struct token) * 2 + 1];
+    uint32_t timestamp;
+    uint32_t nonce;
+    time_t now;
+
+    now = time(NULL);
+    if (now > UINT32_MAX) { /* Ahh? */
+        return EXIT_FAILURE;
+    }
+
+    timestamp = (uint32_t)now;
+    if (RAND_bytes((unsigned char *)&nonce, sizeof(nonce)) != 1) {
+        return EXIT_FAILURE;
+    }
+
+    if (generate_challenge_password_from_subject(
+            key, timestamp, nonce, subject, output)) {
+
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stderr, "DEBUG: timestamp=%u\n", timestamp);
+    fprintf(stderr, "DEBUG: nonce=%u\n", nonce);
+    printf("%s\n", output);
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char *argv[])
 {
     struct httpd *httpd;
@@ -399,7 +686,7 @@ int main(int argc, char *argv[])
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:Eh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:Eh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -410,6 +697,7 @@ int main(int argc, char *argv[])
         { "challenge",  required_argument, NULL, 'C' },
         { "days",       required_argument, NULL, 'V' },
         { "allowrenew", required_argument, NULL, 'R' },
+        { "subject",    required_argument, NULL, 'S' },
         { "exposed_cp", no_argument,       NULL, 'E' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -420,6 +708,7 @@ int main(int argc, char *argv[])
     const char *arg_pkey = NULL;
     const char *arg_pass = NULL;
     const char *arg_chlg = NULL;
+    const char *arg_sjct = NULL;
     const char *arg_days = "90";
     const char *arg_renw = "14";
     const char *arg_cfrm = "pem";
@@ -437,9 +726,14 @@ int main(int argc, char *argv[])
         case 'R': arg_renw = optarg; break;
         case 'f': arg_cfrm = optarg; break;
         case 'F': arg_kfrm = optarg; break;
+        case 'S': arg_sjct = optarg; break;
         case 'E': exposed  =      1; break;
         default : return help(argv[0]);
         }
+    }
+
+    if (arg_sjct && arg_chlg) {
+        return main_generate(arg_sjct, arg_chlg);
     }
 
     if (!arg_port || !arg_cert || !arg_pkey || optind < argc) {

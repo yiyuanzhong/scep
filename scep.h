@@ -71,12 +71,14 @@ extern const ASN1_PRINTABLESTRING *scep_PKCSReq_get_challengePassword(
 extern const X509 *scep_PKCSReq_get_current_certificate(
         const struct scep_PKCSReq *req);
 
+extern X509 *scep_CertRep_get_subject(struct scep_CertRep *rep);
 extern int scep_CertRep_save(struct scep_CertRep *rep, BIO *bp);
 extern void scep_CertRep_free(struct scep_CertRep *rep);
 
 extern struct scep_CertRep *scep_CertRep_new(
         struct scep *scep,
         struct scep_PKCSReq *req,
+        time_t now,
         long days);
 
 extern struct scep_CertRep *scep_CertRep_reject(

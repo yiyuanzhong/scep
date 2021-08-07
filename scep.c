@@ -1111,14 +1111,12 @@ static int scep_set_serial(X509 *subject)
 }
 
 static int scep_set_not_before_not_after(
+        time_t now,
         X509 *subject,
         long notBeforeDays,
         long notAfterDays)
 {
     ASN1_TIME *t;
-    time_t now;
-
-    now = time(NULL);
 
     t = ASN1_TIME_new();
     if (!t) {
@@ -1159,6 +1157,7 @@ static int scep_pkey_hash(X509 *subject)
 }
 
 static int scep_sign(
+        time_t now,
         X509 *issuer,
         EVP_PKEY *pkey,
         const EVP_MD *md,
@@ -1177,7 +1176,7 @@ static int scep_sign(
         return -1;
     }
 
-    if (scep_set_not_before_not_after(subject, 0, days)) {
+    if (scep_set_not_before_not_after(now, subject, 0, days)) {
         return -1;
     }
 
@@ -1468,7 +1467,7 @@ static PKCS7 *scep_CertRep_seal(
 }
 
 struct scep_CertRep *scep_CertRep_new(
-        struct scep *scep, struct scep_PKCSReq *req, long days)
+        struct scep *scep, struct scep_PKCSReq *req, time_t now, long days)
 {
     struct scep_CertRep *rep;
     X509_NAME *name;
@@ -1506,7 +1505,7 @@ struct scep_CertRep *scep_CertRep_new(
         return NULL;
     }
 
-    if (scep_sign(scep->cert, scep->pkey, scep->md, subject, days)) {
+    if (scep_sign(now, scep->cert, scep->pkey, scep->md, subject, days)) {
         X509_free(subject);
         return NULL;
     }
@@ -1561,6 +1560,15 @@ struct scep_CertRep *scep_CertRep_reject(
     }
 
     return rep;
+}
+
+X509 *scep_CertRep_get_subject(struct scep_CertRep *rep)
+{
+    if (!rep) {
+        return NULL;
+    }
+
+    return rep->cert;
 }
 
 int scep_CertRep_save(struct scep_CertRep *rep, BIO *bp)

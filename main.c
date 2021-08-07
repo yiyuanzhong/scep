@@ -7,6 +7,7 @@
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/pem.h>
 #include <openssl/rand.h>
 #include <openssl/x509.h>
 
@@ -24,6 +25,7 @@ struct context {
     const char *challenge_password;
     long allow_renew_days;
     long validity_days;
+    const char *depot;
     struct scep *scep;
 };
 
@@ -41,13 +43,10 @@ static void on_signal_quit(int signum)
     g_quit = signum;
 }
 
-static int validate_validity(const X509 *x509, long days)
+static int validate_validity(time_t now, const X509 *x509, long days)
 {
     const ASN1_TIME *when;
     ASN1_TIME *ts;
-    time_t now;
-
-    now = time(NULL);
 
     when = X509_get0_notBefore(x509);
     if (ASN1_TIME_cmp_time_t(when, now) > 0) {
@@ -323,6 +322,7 @@ static int generate_challenge_password_from_subject(
 }
 
 static int validate_cp(
+        time_t now,
         struct context *ctx,
         const X509_REQ *csr,
         const ASN1_PRINTABLESTRING *cp)
@@ -333,7 +333,6 @@ static int validate_cp(
     const X509_NAME *subject;
     struct token token;
     uint32_t timestamp;
-    time_t now;
 
     if (!ctx->challenge_password || !*ctx->challenge_password) {
         fprintf(stderr, "DEBUG: no challenge succeeded\n");
@@ -359,7 +358,6 @@ static int validate_cp(
         return 0;
     }
 
-    now = time(NULL);
     if (now > UINT32_MAX) { /* Ahh? */
         return -1;
     }
@@ -390,6 +388,7 @@ static int validate_subject(const X509_REQ *csr, const X509 *signer)
 }
 
 static int validate(
+        time_t now,
         struct context *ctx,
         const X509_REQ *csr,
         const ASN1_PRINTABLESTRING *cp,
@@ -402,7 +401,7 @@ static int validate(
      * SAN, only subject is being checked */
 
     if (cp) {
-        ret = validate_cp(ctx, csr, cp);
+        ret = validate_cp(now, ctx, csr, cp);
         if (ret) {
             return ret;
         }
@@ -419,7 +418,7 @@ static int validate(
 
     /* I should check if SAN matches here as well */
 
-    ret = validate_validity(signer, ctx->allow_renew_days);
+    ret = validate_validity(now, signer, ctx->allow_renew_days);
     if (ret <= 0) {
         return ret;
     }
@@ -463,6 +462,62 @@ static unsigned int handle_GetCACert(
     return MHD_HTTP_OK;
 }
 
+static int save_subject(const char *depot, struct scep_CertRep *rep)
+{
+    const ASN1_INTEGER *sn;
+    char file[PATH_MAX];
+    X509 *subject;
+    char *serial;
+    BIGNUM *bn;
+    BIO *bp;
+    int ret;
+
+    subject = scep_CertRep_get_subject(rep);
+    if (!subject) {
+        return -1;
+    }
+
+    sn = X509_get0_serialNumber(subject);
+    if (!sn) {
+        return -1;
+    }
+
+    bn = ASN1_INTEGER_to_BN(sn, NULL);
+    if (!bn) {
+        return -1;
+    }
+
+    serial = BN_bn2hex(bn);
+    if (!serial) {
+        BN_free(bn);
+        return -1;
+    }
+
+    BN_free(bn);
+
+    ret = snprintf(file, sizeof(file), "%s/%s.pem", depot, serial);
+    if (ret < 0 || (size_t)ret >= sizeof(file)) {
+        OPENSSL_free(serial);
+        return -1;
+    }
+
+    OPENSSL_free(serial);
+
+    bp = BIO_new_file(file, "wb");
+    if (!bp) {
+        return -1;
+    }
+
+    if (PEM_write_bio_X509(bp, subject) != 1) {
+        BIO_free_all(bp);
+        unlink(file);
+        return -1;
+    }
+
+    BIO_free_all(bp);
+    return 0;
+}
+
 static unsigned int handle_PKIOperation(
         struct context *ctx,
         BIO *payload,
@@ -476,8 +531,10 @@ static unsigned int handle_PKIOperation(
     const X509_REQ *csr;
     const X509 *signer;
     struct scep *scep;
+    time_t now;
     int ret;
 
+    now = time(NULL);
     scep = ctx->scep;
 
     m = scep_pkiMessage_new(scep, payload,
@@ -505,7 +562,7 @@ static unsigned int handle_PKIOperation(
     cp = scep_PKCSReq_get_challengePassword(req);
     signer = scep_PKCSReq_get_current_certificate(req);
 
-    ret = validate(ctx, csr, cp, signer);
+    ret = validate(now, ctx, csr, cp, signer);
     if (ret < 0) {
         scep_PKCSReq_free(req);
         scep_pkiMessage_free(m);
@@ -515,7 +572,7 @@ static unsigned int handle_PKIOperation(
         rep = scep_CertRep_reject(scep, req, failInfo_badRequest);
 
     } else {
-        rep = scep_CertRep_new(scep, req, ctx->validity_days);
+        rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
     }
 
     if (!rep) {
@@ -525,14 +582,20 @@ static unsigned int handle_PKIOperation(
     }
 
     scep_PKCSReq_free(req);
+    scep_pkiMessage_free(m);
+    if (ret > 0) {
+        if (save_subject(ctx->depot, rep)) {
+            scep_CertRep_free(rep);
+            return MHD_HTTP_INTERNAL_SERVER_ERROR;
+        }
+    }
+
     if (scep_CertRep_save(rep, response)) {
         scep_CertRep_free(rep);
-        scep_pkiMessage_free(m);
         return MHD_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     scep_CertRep_free(rep);
-    scep_pkiMessage_free(m);
 
     *rct = "application/x-pki-message";
     return MHD_HTTP_OK;
@@ -686,7 +749,7 @@ int main(int argc, char *argv[])
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:Eh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:Eh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -698,6 +761,7 @@ int main(int argc, char *argv[])
         { "days",       required_argument, NULL, 'V' },
         { "allowrenew", required_argument, NULL, 'R' },
         { "subject",    required_argument, NULL, 'S' },
+        { "depot",      required_argument, NULL, 'd' },
         { "exposed_cp", no_argument,       NULL, 'E' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -709,6 +773,8 @@ int main(int argc, char *argv[])
     const char *arg_pass = NULL;
     const char *arg_chlg = NULL;
     const char *arg_sjct = NULL;
+
+    const char *arg_dpot = ".";
     const char *arg_days = "90";
     const char *arg_renw = "14";
     const char *arg_cfrm = "pem";
@@ -727,6 +793,7 @@ int main(int argc, char *argv[])
         case 'f': arg_cfrm = optarg; break;
         case 'F': arg_kfrm = optarg; break;
         case 'S': arg_sjct = optarg; break;
+        case 'd': arg_dpot = optarg; break;
         case 'E': exposed  =      1; break;
         default : return help(argv[0]);
         }
@@ -741,8 +808,11 @@ int main(int argc, char *argv[])
     }
 
     memset(&ctx, 0, sizeof(ctx));
+
+    ctx.depot = arg_dpot;
     ctx.challenge_password = arg_chlg;
     ctx.allow_exposed_challenge_password = exposed;
+
     if (atoport(arg_port, &port)                 ||
         atodays(arg_days, &ctx.validity_days)    ||
         atodays(arg_renw, &ctx.allow_renew_days) ||

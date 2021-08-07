@@ -654,8 +654,14 @@ static int help(const char *argv)
                       " <-k pkey> [-F PEM|DER=PEM]"
                       " [-P pass] [-C challenge]"
                       " [-V validity_days=90]"
+                      " [-d /some/where/depot]"
                       " [-R allow_renew_days=14]"
-                      " [-h]\n", argv);
+                      " [-e extension.cnf]\n", argv);
+
+    fprintf(stderr, "%s <-C challenge>"
+                      " <-S /O=US/CN=test>\n", argv);
+
+    fprintf(stderr, "%s <-h>\n", argv);
 
     return EXIT_FAILURE;
 }
@@ -749,7 +755,7 @@ int main(int argc, char *argv[])
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:Eh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:Eh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -762,6 +768,7 @@ int main(int argc, char *argv[])
         { "allowrenew", required_argument, NULL, 'R' },
         { "subject",    required_argument, NULL, 'S' },
         { "depot",      required_argument, NULL, 'd' },
+        { "extensions", required_argument, NULL, 'e' },
         { "exposed_cp", no_argument,       NULL, 'E' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -773,6 +780,7 @@ int main(int argc, char *argv[])
     const char *arg_pass = NULL;
     const char *arg_chlg = NULL;
     const char *arg_sjct = NULL;
+    const char *arg_exts = NULL;
 
     const char *arg_dpot = ".";
     const char *arg_days = "90";
@@ -794,6 +802,7 @@ int main(int argc, char *argv[])
         case 'F': arg_kfrm = optarg; break;
         case 'S': arg_sjct = optarg; break;
         case 'd': arg_dpot = optarg; break;
+        case 'e': arg_exts = optarg; break;
         case 'E': exposed  =      1; break;
         default : return help(argv[0]);
         }
@@ -822,7 +831,6 @@ int main(int argc, char *argv[])
         return help(argv[0]);
     }
 
-
     if (sigemptyset(&empty) ||initialize_signals()) {
         return EXIT_FAILURE;
     }
@@ -837,6 +845,13 @@ int main(int argc, char *argv[])
 
         scep_free(scep);
         return EXIT_FAILURE;
+    }
+
+    if (arg_exts) {
+        if (scep_load_subject_extensions(scep, arg_exts)) {
+            scep_free(scep);
+            return EXIT_FAILURE;
+        }
     }
 
     ctx.scep = scep;

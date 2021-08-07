@@ -46,6 +46,9 @@ extern int scep_load_certificate(
         int keypem,
         const char *keypass);
 
+extern int scep_load_subject_extensions(
+        struct scep *scep, const char *filename);
+
 extern int scep_get_cert(struct scep *scep, BIO *bp);
 
 extern struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp,

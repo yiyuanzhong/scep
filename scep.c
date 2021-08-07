@@ -18,6 +18,12 @@
 
 #define SCEP_RSA_MIN_BITS 2048
 
+struct scep_extension {
+    struct scep_extension *next;
+    char *value;
+    int nid;
+};
+
 struct scep {
     int NID_SCEP_messageType;
     int NID_SCEP_pkiStatus;
@@ -30,6 +36,7 @@ struct scep {
     X509 *cert;
     EVP_PKEY *pkey;
     const EVP_MD *md;
+    struct scep_extension *extensions;
 };
 
 struct scep_pkiMessage_attributes {
@@ -62,6 +69,28 @@ struct scep_CertRep {
     PKCS7 *pkcs7;
     X509 *cert;
 };
+
+static char *trim(char *s)
+{
+    char *p;
+    char *q;
+
+    while (*s && (*s == ' ' || *s == '\t')) {
+        ++s;
+    }
+
+    for (p = q = s; *q; ++q) {
+        if (*q != ' ' && *q != '\t') {
+            p = q;
+        }
+    }
+
+    if (*p) {
+        p[1] = '\0';
+    }
+
+    return s;
+}
 
 static int scep_oid2nid(const char *oid)
 {
@@ -133,14 +162,106 @@ struct scep *scep_new(void)
     return scep;
 }
 
+static int scep_load_subject_extension(struct scep *scep, char *buffer)
+{
+    struct scep_extension *e;
+    struct scep_extension *p;
+    char *value;
+    char *copy;
+    char *key;
+    int nid;
+
+    if (!*buffer || *buffer == '#') {
+        return 0;
+    }
+
+    value = strchr(buffer, '=');
+    if (!value) {
+        return -1;
+    }
+
+    *value++ = '\0';
+    key = trim(buffer);
+    value = trim(value);
+    if (!*key || !*value) {
+        return -1;
+    }
+
+    nid = OBJ_txt2nid(key);
+    if (nid == NID_undef) {
+        return -1;
+    }
+
+    copy = strdup(value);
+    if (!copy) {
+        return -1;
+    }
+
+    e = (struct scep_extension *)malloc(sizeof(*e));
+    if (!e) {
+        free(copy);
+        return -1;
+    }
+
+    memset(e, 0, sizeof(*e));
+    e->value = copy;
+    e->nid = nid;
+
+    if (!(p = scep->extensions)) {
+        scep->extensions = e;
+        return 0;
+    }
+
+    while (p->next) {
+        p = p->next;
+    }
+
+    p->next = e;
+    return 0;
+}
+
+int scep_load_subject_extensions(struct scep *scep, const char *filename)
+{
+    char line[256];
+    BIO *bp;
+    int len;
+
+    bp = BIO_new_file(filename, "r");
+    if (!bp) {
+        return -1;
+    }
+
+    while ((len = BIO_gets(bp, line, sizeof(line))) > 0) {
+        if (line[len - 1] == '\n') {
+            line[--len] = '\0';
+        }
+
+        if (scep_load_subject_extension(scep, line)) {
+            len = -1;
+            break;
+        }
+    }
+
+    BIO_free_all(bp);
+    return len >= 0 ? 0 : -1;
+}
+
 void scep_free(struct scep *scep)
 {
+    struct scep_extension *p;
+
     if (scep->cert) {
         X509_free(scep->cert);
     }
 
     if (scep->pkey) {
         EVP_PKEY_free(scep->pkey);
+    }
+
+    while ((p = scep->extensions)) {
+        scep->extensions = p->next;
+        free(p->value);
+        free(p);
     }
 
     free(scep);
@@ -1147,23 +1268,32 @@ static int scep_set_not_before_not_after(
     return 0;
 }
 
-static int scep_pkey_hash(X509 *subject)
+static int scep_add_default_extensions(X509 *issuer, X509 *subject)
 {
-    unsigned char md[EVP_MAX_MD_SIZE];
-    unsigned int len;
+    if (scep_add_ext(issuer, subject,
+            NID_basic_constraints, "critical,CA:FALSE")   ||
+        scep_add_ext(issuer, subject,
+            NID_key_usage, "critical,digitalSignature")   ||
+        scep_add_ext(issuer, subject,
+            NID_ext_key_usage, "clientAuth")              ||
+        scep_add_ext(issuer, subject,
+            NID_subject_key_identifier, "hash")           ||
+        scep_add_ext(issuer, subject,
+            NID_authority_key_identifier, "keyid:always") ){
+        return -1;
+    }
 
-    X509_pubkey_digest(subject, EVP_sha1(), md, &len);
     return 0;
 }
 
 static int scep_sign(
         time_t now,
-        X509 *issuer,
-        EVP_PKEY *pkey,
-        const EVP_MD *md,
+        struct scep *scep,
         X509 *subject,
         long days)
 {
+    struct scep_extension *p;
+
     if (X509_set_version(subject, 2) != 1) { /* X509 V3 */
         return -1;
     }
@@ -1172,7 +1302,9 @@ static int scep_sign(
         return -1;
     }
 
-    if (X509_set_issuer_name(subject, X509_get_subject_name(issuer)) != 1) {
+    if (X509_set_issuer_name(subject,
+            X509_get_subject_name(scep->cert)) != 1) {
+
         return -1;
     }
 
@@ -1180,23 +1312,19 @@ static int scep_sign(
         return -1;
     }
 
-    if (scep_add_ext(issuer, subject,
-            NID_basic_constraints, "critical,CA:FALSE")                 ||
-        scep_add_ext(issuer, subject,
-            NID_key_usage, "critical,digitalSignature")                 ||
-        scep_add_ext(issuer, subject,
-            NID_ext_key_usage, "clientAuth")                            ||
-        scep_add_ext(issuer, subject,
-            NID_subject_key_identifier, "hash")                         ||
-        scep_add_ext(issuer, subject,
-            NID_authority_key_identifier, "keyid:always,issuer:always") ){
-
-        return -1;
+    if (!scep->extensions) { /* Not good, we should have something... */
+        if (scep_add_default_extensions(scep->cert, subject)) {
+            return -1;
+        }
     }
 
-    scep_pkey_hash(subject);
+    for (p = scep->extensions; p; p = p->next) {
+        if (scep_add_ext(scep->cert, subject, p->nid, p->value)) {
+            return -1;
+        }
+    }
 
-    if (X509_sign(subject, pkey, md) == 0) {
+    if (X509_sign(subject, scep->pkey, scep->md) == 0) {
         return -1;
     }
 
@@ -1505,7 +1633,7 @@ struct scep_CertRep *scep_CertRep_new(
         return NULL;
     }
 
-    if (scep_sign(now, scep->cert, scep->pkey, scep->md, subject, days)) {
+    if (scep_sign(now, scep, subject, days)) {
         X509_free(subject);
         return NULL;
     }

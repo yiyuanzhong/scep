@@ -584,9 +584,11 @@ static unsigned int handle_PKIOperation(
     scep_PKCSReq_free(req);
     scep_pkiMessage_free(m);
     if (ret > 0) {
-        if (save_subject(ctx->depot, rep)) {
-            scep_CertRep_free(rep);
-            return MHD_HTTP_INTERNAL_SERVER_ERROR;
+        if (ctx->depot && *ctx->depot) {
+            if (save_subject(ctx->depot, rep)) {
+                scep_CertRep_free(rep);
+                return MHD_HTTP_INTERNAL_SERVER_ERROR;
+            }
         }
     }
 
@@ -781,8 +783,8 @@ int main(int argc, char *argv[])
     const char *arg_chlg = NULL;
     const char *arg_sjct = NULL;
     const char *arg_exts = NULL;
+    const char *arg_dpot = NULL;
 
-    const char *arg_dpot = ".";
     const char *arg_days = "90";
     const char *arg_renw = "14";
     const char *arg_cfrm = "pem";

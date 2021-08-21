@@ -766,6 +766,7 @@ int main(int argc, char *argv[])
     sigset_t empty;
     uint16_t port;
     int exposed;
+    size_t i;
     int cfrm;
     int lfrm;
     int kfrm;
@@ -801,15 +802,22 @@ int main(int argc, char *argv[])
     const char *arg_sjct = NULL;
     const char *arg_exts = NULL;
     const char *arg_dpot = NULL;
-    const char *arg_link = NULL;
+
+    const char *arg_link[8];
+    const char *arg_lfrm[8];
+    size_t arg_links;
 
     const char *arg_days = "90";
     const char *arg_renw = "14";
     const char *arg_cfrm = "pem";
-    const char *arg_lfrm = "pem";
     const char *arg_kfrm = "pem";
 
     exposed = 0;
+    arg_links = 0;
+    for (i = 0; i < sizeof(arg_link) / sizeof(*arg_link); ++i) {
+        arg_lfrm[i] = "pem";
+    }
+
     while ((c = getopt_long(argc, argv, kOptString, kLongOpts, NULL)) != -1) {
         switch (c) {
         case 'p': arg_port = optarg; break;
@@ -824,9 +832,17 @@ int main(int argc, char *argv[])
         case 'S': arg_sjct = optarg; break;
         case 'd': arg_dpot = optarg; break;
         case 'e': arg_exts = optarg; break;
-        case 'l': arg_link = optarg; break;
-        case 'L': arg_lfrm = optarg; break;
         case 'E': exposed  =      1; break;
+
+        case 'L': arg_lfrm[arg_links] = optarg; break;
+        case 'l':
+            if (arg_links + 1 == sizeof(arg_link) / sizeof(*arg_link)) {
+                fprintf(stderr, "Too long certificate chain\n");
+                return EXIT_FAILURE;
+            }
+            arg_link[arg_links++] = optarg;
+            break;
+
         default : return help(argv[0]);
         }
     }
@@ -870,12 +886,12 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (arg_link) { /* TODO: can be multiple */
-        if (atoform(arg_lfrm, &lfrm)) {
+    for (i = 0; i < arg_links; ++i) {
+        if (atoform(arg_lfrm[i], &lfrm)) {
             return help(argv[0]);
         }
 
-        if (scep_load_certificate_chain(scep, arg_link, lfrm)) {
+        if (scep_load_certificate_chain(scep, arg_link[i], lfrm)) {
             scep_free(scep);
             return EXIT_FAILURE;
         }

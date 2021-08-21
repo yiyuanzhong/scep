@@ -38,6 +38,7 @@ enum failInfo {
 extern struct scep *scep_new(void);
 extern void scep_free(struct scep *scep);
 
+/* Load signing certificate first */
 extern int scep_load_certificate(
         struct scep *scep,
         const char *certfile,
@@ -46,9 +47,16 @@ extern int scep_load_certificate(
         int keypem,
         const char *keypass);
 
+/* Then load certificate chain if needed */
+extern int scep_load_certificate_chain(
+        struct scep *scep,
+        const char *certfile,
+        int certpem);
+
 extern int scep_load_subject_extensions(
         struct scep *scep, const char *filename);
 
+/* Returns number of certificates included, or -1 for error */
 extern int scep_get_cert(struct scep *scep, BIO *bp);
 
 extern struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp,

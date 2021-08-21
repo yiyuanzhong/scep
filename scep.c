@@ -1,5 +1,7 @@
 #include "scep.h"
 
+#include <assert.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +38,7 @@ struct scep {
     X509 *cert;
     EVP_PKEY *pkey;
     const EVP_MD *md;
+    STACK_OF(X509) *chain;
     struct scep_extension *extensions;
 };
 
@@ -249,13 +252,20 @@ int scep_load_subject_extensions(struct scep *scep, const char *filename)
 void scep_free(struct scep *scep)
 {
     struct scep_extension *p;
+    X509 *cert;
+    int num;
+    int i;
 
-    if (scep->cert) {
-        X509_free(scep->cert);
-    }
-
-    if (scep->pkey) {
+    if (scep->chain) { /* Signing cert is included */
+        assert(scep->pkey);
         EVP_PKEY_free(scep->pkey);
+        num = sk_X509_num(scep->chain);
+        for (i = 0; i < num; ++i) {
+            cert = sk_X509_value(scep->chain, i);
+            X509_free(cert);
+        }
+
+        sk_X509_free(scep->chain);
     }
 
     while ((p = scep->extensions)) {
@@ -313,27 +323,18 @@ static int scep_PKCS7_SIGNER_INFO_check_algo(PKCS7_SIGNER_INFO *si)
     return scep_check_signature_algo(nid);
 }
 
-int scep_load_certificate(
-        struct scep *scep,
+static X509 *scep_load_certificate_only(
         const char *certfile,
         int certpem,
-        const char *keyfile,
-        int keypem,
-        const char *keypass)
+        const EVP_MD **md)
 {
-    const EVP_MD *md;
-    EVP_PKEY *pkey;
     X509 *cert;
-    int nid;
     BIO *bp;
-
-    if (!scep) {
-        return -1;
-    }
+    int nid;
 
     bp = BIO_new_file(certfile, "rb");
     if (!bp) {
-        return -1;
+        return NULL;
     }
 
     if (certpem) {
@@ -344,24 +345,54 @@ int scep_load_certificate(
 
     if (!cert) {
         BIO_free_all(bp);
-        return -1;
+        return NULL;
     }
 
     BIO_free_all(bp);
     if (X509_get_version(cert) < 2) { /* X509 V3 */
         X509_free(cert);
-        return -1;
+        return NULL;
+    }
+
+    if (!md) {
+        return cert;
     }
 
     nid = X509_get_signature_nid(cert);
     if (scep_check_signature_algo(nid)) {
         X509_free(cert);
+        return NULL;
+    }
+
+    *md = EVP_get_digestbynid(nid);
+    if (!*md) {
+        X509_free(cert);
+        return NULL;
+    }
+
+    return cert;
+}
+
+int scep_load_certificate(
+        struct scep *scep,
+        const char *certfile,
+        int certpem,
+        const char *keyfile,
+        int keypem,
+        const char *keypass)
+{
+    STACK_OF(X509) *chain;
+    const EVP_MD *md;
+    EVP_PKEY *pkey;
+    X509 *cert;
+    BIO *bp;
+
+    if (!scep || scep->cert) {
         return -1;
     }
 
-    md = EVP_get_digestbynid(nid);
-    if (!md) {
-        X509_free(cert);
+    cert = scep_load_certificate_only(certfile, certpem, &md);
+    if (!cert) {
         return -1;
     }
 
@@ -385,17 +416,72 @@ int scep_load_certificate(
 
     BIO_free_all(bp);
 
-    if (scep->cert) {
-        X509_free(scep->cert);
+    chain = sk_X509_new_null();
+    if (!chain) {
+        EVP_PKEY_free(pkey);
+        X509_free(cert);
+        return -1;
     }
 
-    if (scep->pkey) {
-        EVP_PKEY_free(scep->pkey);
+    if (sk_X509_push(chain, cert) == 0) {
+        sk_X509_free(chain);
+        EVP_PKEY_free(pkey);
+        X509_free(cert);
+        return -1;
     }
 
+    assert(!scep->chain);
+    assert(!scep->cert);
+    assert(!scep->pkey);
+    assert(!scep->md);
+
+    scep->chain = chain;
     scep->cert = cert;
     scep->pkey = pkey;
     scep->md = md;
+    return 0;
+}
+
+int scep_load_certificate_chain(
+        struct scep *scep,
+        const char *certfile,
+        int certpem)
+{
+    STACK_OF(X509) *chain;
+    X509 *cert;
+
+    if (!scep || !scep->cert) {
+        return -1;
+    }
+
+    cert = scep_load_certificate_only(certfile, certpem, NULL);
+    if (!cert) {
+        return -1;
+    }
+
+    if (scep->chain) {
+        if (sk_X509_push(scep->chain, cert) == 0) {
+            X509_free(cert);
+            return -1;
+        }
+
+    } else {
+        chain = sk_X509_new_null();
+        if (!chain) {
+            return -1;
+        }
+
+        if (sk_X509_push(chain, scep->cert) == 0 ||
+            sk_X509_push(chain, cert) == 0       ){
+
+            sk_X509_free(chain);
+            X509_free(cert);
+            return -1;
+        }
+
+        scep->chain = chain;
+    }
+
     return 0;
 }
 
@@ -1437,9 +1523,8 @@ static PKCS7 *scep_pkiMessage_seal(
     return pkcs7;
 }
 
-static int scep_degenerate(X509 *cert, BIO *bp)
+static int scep_degenerate_chain(BIO *bp, STACK_OF(X509) *certs)
 {
-    STACK_OF(X509) *certs;
     PKCS7_SIGNED *p7s;
     PKCS7 *pkcs7;
 
@@ -1465,31 +1550,51 @@ static int scep_degenerate(X509 *cert, BIO *bp)
         return -1;
     }
 
-    certs = sk_X509_new_null();
-    if (!certs) {
-        PKCS7_free(pkcs7);
-        return -1;
-    }
-
     p7s->cert = certs;
-    if (sk_X509_push(certs, cert) <= 0) {
-        sk_X509_free(p7s->cert);
-        p7s->cert = NULL;
-        PKCS7_free(pkcs7);
-        return -1;
-    }
-
     if (i2d_PKCS7_bio(bp, pkcs7) != 1) {
-        sk_X509_free(p7s->cert);
         p7s->cert = NULL;
         PKCS7_free(pkcs7);
         return -1;
     }
 
-    sk_X509_free(p7s->cert);
     p7s->cert = NULL;
     PKCS7_free(pkcs7);
     return 0;
+}
+
+static int scep_degenerate_va(BIO *bp, va_list ap)
+{
+    STACK_OF(X509) *chain;
+    X509 *cert;
+    int ret;
+
+    chain = sk_X509_new_null();
+    if (!chain) {
+        return -1;
+    }
+
+    while ((cert = va_arg(ap, X509 *))) {
+        if (sk_X509_push(chain, cert) == 0) {
+            sk_X509_free(chain);
+            return -1;
+        }
+    }
+
+    ret = scep_degenerate_chain(bp, chain);
+    sk_X509_free(chain);
+    return ret;
+}
+
+static int scep_degenerate(BIO *bp, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, bp);
+    ret = scep_degenerate_va(bp, ap);
+    va_end(ap);
+
+    return ret;
 }
 
 static int scep_CertRep_set_SAN(X509_REQ *req, X509 *subject)
@@ -1546,7 +1651,7 @@ static PKCS7 *scep_CertRep_seal(
             return NULL;
         }
 
-        if (scep_degenerate(subject, payload)) {
+        if (scep_degenerate(payload, subject, NULL)) {
             BIO_free_all(payload);
             return NULL;
         }
@@ -1731,15 +1836,27 @@ void scep_CertRep_free(struct scep_CertRep *rep)
 
 int scep_get_cert(struct scep *scep, BIO *bp)
 {
-    if (!scep || !scep->cert) {
+    int num;
+
+    if (!scep || !scep->chain) {
         return -1;
     }
 
-    if (i2d_X509_bio(bp, scep->cert) != 1) {
+    num = sk_X509_num(scep->chain);
+    if (num <= 0) {
+        return -1;
+
+    } else if (num == 1) {
+        if (i2d_X509_bio(bp, scep->cert) != 1) {
+            return -1;
+        }
+        return 1;
+
+    } else if (scep_degenerate_chain(bp, scep->chain)) {
         return -1;
     }
 
-    return 0;
+    return num;
 }
 
 const ASN1_PRINTABLESTRING *scep_PKCSReq_get_challengePassword(

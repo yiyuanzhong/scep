@@ -400,6 +400,11 @@ static int validate(
      * but since I haven't implemented authenticated challenge passwords for
      * SAN, only subject is being checked */
 
+    if (!ctx->challenge_password || !*ctx->challenge_password) {
+        fprintf(stderr, "DEBUG: no challenge succeeded\n");
+        return 1;
+    }
+
     if (cp) {
         ret = validate_cp(now, ctx, csr, cp);
         if (ret) {
@@ -452,13 +457,22 @@ static unsigned int handle_GetCACert(
         const char **rct,
         BIO *response)
 {
+    int num;
+
     (void)payload;
 
-    if (scep_get_cert(ctx->scep, response)) {
+    num = scep_get_cert(ctx->scep, response);
+
+    if (num <= 0) {
         return MHD_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    *rct = "application/x-x509-ca-cert";
+    if (num == 1) {
+        *rct = "application/x-x509-ca-cert";
+    } else {
+        *rct = "application/x-x509-ca-ra-cert";
+    }
+
     return MHD_HTTP_OK;
 }
 
@@ -753,11 +767,12 @@ int main(int argc, char *argv[])
     uint16_t port;
     int exposed;
     int cfrm;
+    int lfrm;
     int kfrm;
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:Eh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:Eh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -771,6 +786,8 @@ int main(int argc, char *argv[])
         { "subject",    required_argument, NULL, 'S' },
         { "depot",      required_argument, NULL, 'd' },
         { "extensions", required_argument, NULL, 'e' },
+        { "chain",      required_argument, NULL, 'l' },
+        { "chainform",  required_argument, NULL, 'L' },
         { "exposed_cp", no_argument,       NULL, 'E' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -784,10 +801,12 @@ int main(int argc, char *argv[])
     const char *arg_sjct = NULL;
     const char *arg_exts = NULL;
     const char *arg_dpot = NULL;
+    const char *arg_link = NULL;
 
     const char *arg_days = "90";
     const char *arg_renw = "14";
     const char *arg_cfrm = "pem";
+    const char *arg_lfrm = "pem";
     const char *arg_kfrm = "pem";
 
     exposed = 0;
@@ -805,6 +824,8 @@ int main(int argc, char *argv[])
         case 'S': arg_sjct = optarg; break;
         case 'd': arg_dpot = optarg; break;
         case 'e': arg_exts = optarg; break;
+        case 'l': arg_link = optarg; break;
+        case 'L': arg_lfrm = optarg; break;
         case 'E': exposed  =      1; break;
         default : return help(argv[0]);
         }
@@ -847,6 +868,17 @@ int main(int argc, char *argv[])
 
         scep_free(scep);
         return EXIT_FAILURE;
+    }
+
+    if (arg_link) { /* TODO: can be multiple */
+        if (atoform(arg_lfrm, &lfrm)) {
+            return help(argv[0]);
+        }
+
+        if (scep_load_certificate_chain(scep, arg_link, lfrm)) {
+            scep_free(scep);
+            return EXIT_FAILURE;
+        }
     }
 
     if (arg_exts) {

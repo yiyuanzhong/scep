@@ -277,17 +277,10 @@ void scep_free(struct scep *scep)
     free(scep);
 }
 
-static int scep_check_signature_algo(int nid)
+static int scep_check_digest_algo(int nid)
 {
-    const EVP_MD *md;
-
-    md = EVP_get_digestbynid(nid);
-    if (!md) {
-        return -1;
-    }
-
     /* There're many algos, just block some known bad ones */
-    switch (EVP_MD_nid(md)) {
+    switch (nid) {
     case NID_undef:
     case NID_md2:
     case NID_md4:
@@ -296,6 +289,26 @@ static int scep_check_signature_algo(int nid)
     }
 
     return 0;
+}
+
+static int scep_check_signature_algo(int nid)
+{
+    const EVP_MD *md;
+
+    /* Explicit allow naked RSA without any hash */
+    switch (nid) {
+    case NID_rsaEncryption:
+        return 0;
+    }
+
+    /* Otherwise the algorithm should contain a digest */
+    md = EVP_get_digestbynid(nid);
+    if (!md) {
+        return -1;
+    }
+
+    nid = EVP_MD_nid(md);
+    return scep_check_digest_algo(nid);
 }
 
 static int scep_PKCS7_SIGNER_INFO_check_algo(PKCS7_SIGNER_INFO *si)
@@ -309,18 +322,17 @@ static int scep_PKCS7_SIGNER_INFO_check_algo(PKCS7_SIGNER_INFO *si)
         return -1;
     }
 
-    /* There're many algos, just block some known bad ones */
     nid = OBJ_obj2nid(digest->algorithm);
-    switch (nid) {
-    case NID_undef:
-    case NID_md2:
-    case NID_md4:
-    case NID_md5:
+    if (scep_check_digest_algo(nid)) {
         return -1;
     }
 
     nid = OBJ_obj2nid(sign->algorithm);
-    return scep_check_signature_algo(nid);
+    if (scep_check_signature_algo(nid)) {
+        return -1;
+    }
+
+    return 0;
 }
 
 static X509 *scep_load_certificate_only(

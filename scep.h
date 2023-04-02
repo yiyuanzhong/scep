@@ -38,6 +38,9 @@ enum failInfo {
 struct scep_configure { /* memset() to 0 for all default */
     /* macOS bug, challenge password is in pkcsPKIEnvelope unencrypted */
     int tolerate_exposed_challenge_password;
+
+    /* transactionID is usually the hash of the pubkey, but not always the case */
+    int no_validate_transaction_id;
 };
 
 extern struct scep *scep_new(const struct scep_configure *configure);

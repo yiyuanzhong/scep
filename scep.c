@@ -1075,6 +1075,7 @@ static int scep_unhex(unsigned char *s, unsigned int len, unsigned char *o)
 }
 
 static int scep_check_transactionID(
+        struct scep *scep,
         X509_REQ *csr,
         ASN1_PRINTABLESTRING *transactionID)
 {
@@ -1085,16 +1086,16 @@ static int scep_check_transactionID(
     EVP_PKEY *pkey;
     X509 *x509;
 
-    if (transactionID->length < 0 || transactionID->length % 2) {
+    if (transactionID->length <= 0) {
         return -1;
     }
 
-    switch (transactionID->length / 2) {
-    case MD5_DIGEST_LENGTH:    type = EVP_md5();    break;
-    case SHA_DIGEST_LENGTH:    type = EVP_sha1();   break;
-    case SHA256_DIGEST_LENGTH: type = EVP_sha256(); break;
-    case SHA512_DIGEST_LENGTH: type = EVP_sha512(); break;
-    default : return -1;
+    if (scep->configure.no_validate_transaction_id) {
+        return 0;
+    }
+
+    if (transactionID->length % 2) {
+        return -1;
     }
 
     if (scep_unhex(transactionID->data, transactionID->length, expected)) {
@@ -1104,6 +1105,15 @@ static int scep_check_transactionID(
     pkey = X509_REQ_get0_pubkey(csr); /* Internal */
     if (!pkey) {
         return -1;
+    }
+
+    len = transactionID->length / 2;
+    switch (len) {
+    case MD5_DIGEST_LENGTH:    type = EVP_md5();    break;
+    case SHA_DIGEST_LENGTH:    type = EVP_sha1();   break;
+    case SHA256_DIGEST_LENGTH: type = EVP_sha256(); break;
+    case SHA512_DIGEST_LENGTH: type = EVP_sha512(); break;
+    default : return -1;
     }
 
     x509 = X509_new();
@@ -1231,7 +1241,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
     }
 
     /* Enrollment, well formed transactionID is expected */
-    if (scep_check_transactionID(csr, a->transactionID)) {
+    if (scep_check_transactionID(scep, csr, a->transactionID)) {
         X509_REQ_free(csr);
         return NULL;
     }

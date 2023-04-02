@@ -763,6 +763,7 @@ int main(int argc, char *argv[])
     struct scep *scep;
     sigset_t empty;
     uint16_t port;
+    int trans_id;
     int exposed;
     size_t i;
     int cfrm;
@@ -771,7 +772,7 @@ int main(int argc, char *argv[])
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:Eh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:ETh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -787,6 +788,7 @@ int main(int argc, char *argv[])
         { "extensions", required_argument, NULL, 'e' },
         { "chain",      required_argument, NULL, 'l' },
         { "chainform",  required_argument, NULL, 'L' },
+        { "trans_id",   no_argument,       NULL, 'T' },
         { "exposed_cp", no_argument,       NULL, 'E' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -811,6 +813,7 @@ int main(int argc, char *argv[])
     const char *arg_kfrm = "pem";
 
     exposed = 0;
+    trans_id = 0;
     arg_links = 0;
     for (i = 0; i < sizeof(arg_link) / sizeof(*arg_link); ++i) {
         arg_lfrm[i] = "pem";
@@ -831,6 +834,7 @@ int main(int argc, char *argv[])
         case 'd': arg_dpot = optarg; break;
         case 'e': arg_exts = optarg; break;
         case 'E': exposed  =      1; break;
+        case 'T': trans_id =      1; break;
 
         case 'L': arg_lfrm[arg_links] = optarg; break;
         case 'l':
@@ -858,6 +862,7 @@ int main(int argc, char *argv[])
 
     ctx.depot = arg_dpot;
     ctx.challenge_password = arg_chlg;
+    configure.no_validate_transaction_id = trans_id;
     configure.tolerate_exposed_challenge_password = exposed;
 
     if (atoport(arg_port, &port)                 ||

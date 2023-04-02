@@ -27,6 +27,8 @@ struct scep_extension {
 };
 
 struct scep {
+    struct scep_configure configure;
+
     int NID_SCEP_messageType;
     int NID_SCEP_pkiStatus;
     int NID_SCEP_failInfo;
@@ -131,7 +133,7 @@ static int scep_get_rsa_key_bits(EVP_PKEY *pkey)
     return bytes * 8;
 }
 
-struct scep *scep_new(void)
+struct scep *scep_new(const struct scep_configure *configure)
 {
     struct scep *scep;
 
@@ -141,6 +143,9 @@ struct scep *scep_new(void)
     }
 
     memset(scep, 0, sizeof(*scep));
+    if (configure) {
+        memcpy(&scep->configure, configure, sizeof(*configure));
+    }
 
     scep->NID_SCEP_messageType    = scep_oid2nid("2.16.840.1.113733.1.9.2");
     scep->NID_SCEP_pkiStatus      = scep_oid2nid("2.16.840.1.113733.1.9.3");
@@ -867,10 +872,7 @@ static int scep_pkiMessage_set_type(struct scep_pkiMessage *m)
     return -1;
 }
 
-struct scep_pkiMessage *scep_pkiMessage_new(
-        struct scep *scep,
-        BIO *bp,
-        int allow_exposed_challenge_password)
+struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
 {
     STACK_OF(PKCS7_SIGNER_INFO) *signers;
     STACK_OF(X509_ATTRIBUTE) *auth_attr;
@@ -980,7 +982,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(
 
     /* Fail uncompliant client exposing secret information */
     if (PKCS7_get_signed_attribute(signer, NID_pkcs9_challengePassword)) {
-        if (!allow_exposed_challenge_password) {
+        if (!scep->configure.tolerate_exposed_challenge_password) {
             BIO_free_all(wbp);
             PKCS7_free(pkcs7);
             return NULL;

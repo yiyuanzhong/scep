@@ -35,7 +35,12 @@ enum failInfo {
     failInfo_badCertId          = 4,
 };
 
-extern struct scep *scep_new(void);
+struct scep_configure { /* memset() to 0 for all default */
+    /* macOS bug, challenge password is in pkcsPKIEnvelope unencrypted */
+    int tolerate_exposed_challenge_password;
+};
+
+extern struct scep *scep_new(const struct scep_configure *configure);
 extern void scep_free(struct scep *scep);
 
 /* Load signing certificate first */
@@ -59,8 +64,7 @@ extern int scep_load_subject_extensions(
 /* Returns number of certificates included, or -1 for error */
 extern int scep_get_cert(struct scep *scep, BIO *bp);
 
-extern struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp,
-        int allow_exposed_challenge_password); /* macOS bug */
+extern struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp);
 
 extern enum messageType scep_pkiMessage_get_type(
         const struct scep_pkiMessage *m);

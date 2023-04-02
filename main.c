@@ -21,7 +21,6 @@
 #endif
 
 struct context {
-    int allow_exposed_challenge_password;
     const char *challenge_password;
     long allow_renew_days;
     long validity_days;
@@ -551,9 +550,7 @@ static unsigned int handle_PKIOperation(
     now = time(NULL);
     scep = ctx->scep;
 
-    m = scep_pkiMessage_new(scep, payload,
-            ctx->allow_exposed_challenge_password);
-
+    m = scep_pkiMessage_new(scep, payload);
     if (!m) {
         return MHD_HTTP_BAD_REQUEST;
     }
@@ -760,6 +757,7 @@ static int main_generate(const char *subject, const char *key)
 
 int main(int argc, char *argv[])
 {
+    struct scep_configure configure;
     struct httpd *httpd;
     struct context ctx;
     struct scep *scep;
@@ -856,10 +854,11 @@ int main(int argc, char *argv[])
     }
 
     memset(&ctx, 0, sizeof(ctx));
+    memset(&configure, 0, sizeof(configure));
 
     ctx.depot = arg_dpot;
     ctx.challenge_password = arg_chlg;
-    ctx.allow_exposed_challenge_password = exposed;
+    configure.tolerate_exposed_challenge_password = exposed;
 
     if (atoport(arg_port, &port)                 ||
         atodays(arg_days, &ctx.validity_days)    ||
@@ -874,7 +873,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    scep = scep_new();
+    scep = scep_new(&configure);
     if (!scep) {
         return EXIT_FAILURE;
     }

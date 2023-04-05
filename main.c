@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <string.h>
 
 #include <getopt.h>
@@ -14,6 +15,7 @@
 #include <microhttpd.h>
 
 #include "httpd.h"
+#include "logger.h"
 #include "scep.h"
 
 #ifndef static_assert
@@ -71,7 +73,7 @@ static int validate_validity(time_t now, const X509 *x509, long days)
             return 0;
         }
 
-        fprintf(stderr, "DEBUG: good renewal\n");
+        LOGI("good renewal");
         ASN1_TIME_free(ts);
 
     } else {
@@ -79,7 +81,7 @@ static int validate_validity(time_t now, const X509 *x509, long days)
             return 0;
         }
 
-        fprintf(stderr, "DEBUG: good anytime renewal\n");
+        LOGI("good anytime renewal");
     }
 
     return 1;
@@ -333,11 +335,7 @@ static int validate_cp(
     struct token token;
     uint32_t timestamp;
 
-    if (!ctx->challenge_password || !*ctx->challenge_password) {
-        fprintf(stderr, "DEBUG: no challenge succeeded\n");
-        return 1;
-    }
-
+    assert(ctx->challenge_password && *ctx->challenge_password);
     if (cp->length != sizeof(token) * 2) {
         return 0;
     }
@@ -363,10 +361,11 @@ static int validate_cp(
 
     timestamp = (uint32_t)now;
     if (token.timestamp > timestamp || timestamp - token.timestamp > kValid) {
+        LOGD("scep: good challenge password but no longer valid");
         return 0;
     }
 
-    fprintf(stderr, "DEBUG: good challenge succeeded\n");
+    LOGD("scep: challenge password is valid");
     return 1;
 }
 
@@ -400,7 +399,7 @@ static int validate(
      * SAN, only subject is being checked */
 
     if (!ctx->challenge_password || !*ctx->challenge_password) {
-        fprintf(stderr, "DEBUG: no challenge succeeded\n");
+        LOGD("scep: challenge not required");
         return 1;
     }
 
@@ -411,22 +410,31 @@ static int validate(
         }
     }
 
+    LOGD("scep: no valid challenge password found");
     if (!signer) {
+        LOGD("scep: signer is not using a valid certificate");
         return 0;
     }
 
+    LOGD("scep: signer is using a trusted certificate from an authorized CA");
+
     ret = validate_subject(csr, signer);
     if (ret <= 0) {
+        LOGD("scep: signer requested a different identity");
         return ret;
     }
+
+    LOGD("scep: signer is the same identity as the CSR");
 
     /* I should check if SAN matches here as well */
 
     ret = validate_validity(now, signer, ctx->allow_renew_days);
     if (ret <= 0) {
+        LOGD("scep: signing certificate has expired already");
         return ret;
     }
 
+    LOGD("scep: request is signed by a still valid certificate");
     return 1;
 }
 
@@ -547,6 +555,10 @@ static unsigned int handle_PKIOperation(
     time_t now;
     int ret;
 
+#ifndef NDEBUG
+    char buffer[1024];
+#endif
+
     now = time(NULL);
     scep = ctx->scep;
 
@@ -573,6 +585,18 @@ static unsigned int handle_PKIOperation(
     cp = scep_PKCSReq_get_challengePassword(req);
     signer = scep_PKCSReq_get_current_certificate(req);
 
+#ifndef NDEBUG
+    if (X509_NAME_oneline(X509_REQ_get_subject_name(csr), buffer, sizeof(buffer))) {
+        LOGD("scep: CSR subject: %s", buffer);
+    }
+
+    if (signer) {
+        if (X509_NAME_oneline(X509_get_subject_name(signer), buffer, sizeof(buffer))) {
+            LOGD("scep: signer subject: %s", buffer);
+        }
+    }
+#endif
+
     ret = validate(now, ctx, csr, cp, signer);
     if (ret < 0) {
         scep_PKCSReq_free(req);
@@ -580,9 +604,11 @@ static unsigned int handle_PKIOperation(
         return MHD_HTTP_INTERNAL_SERVER_ERROR;
 
     } else if (ret == 0) {
+        LOGW("scep: PKCSReq authorization failed");
         rep = scep_CertRep_reject(scep, req, failInfo_badRequest);
 
     } else {
+        LOGI("scep: PKCSReq authorized");
         rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
     }
 
@@ -749,8 +775,7 @@ static int main_generate(const char *subject, const char *key)
         return EXIT_FAILURE;
     }
 
-    fprintf(stderr, "DEBUG: timestamp=%u\n", timestamp);
-    fprintf(stderr, "DEBUG: nonce=%u\n", nonce);
+    LOGD("timestamp=%u nonce=%u\n", timestamp, nonce);
     printf("%s\n", output);
     return EXIT_SUCCESS;
 }

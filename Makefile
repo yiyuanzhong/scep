@@ -27,14 +27,17 @@ all: scep
 clean:
 	rm -f scep *.o
 
-scep: main.c.o scep.c.o httpd.c.o
+scep: main.c.o scep.c.o httpd.c.o logger.c.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-main.c.o: main.c scep.h httpd.h
+main.c.o: main.c scep.h httpd.h logger.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
 
-scep.c.o: scep.c scep.h
+scep.c.o: scep.c scep.h logger.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
 
 httpd.c.o: httpd.c httpd.h
+	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
+
+logger.c.o: logger.c logger.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)

@@ -18,6 +18,8 @@
 #include <openssl/x509v3.h>
 #include <openssl/x509_vfy.h>
 
+#include "logger.h"
+
 #define SCEP_RSA_MIN_BITS 2048
 
 struct scep_extension {
@@ -117,6 +119,7 @@ static int scep_get_rsa_key_bits(EVP_PKEY *pkey)
 
     rsa = EVP_PKEY_get0_RSA(pkey);
     if (!rsa) {
+        LOGD("scep: key is not of type RSA");
         return -1;
     }
 
@@ -890,22 +893,26 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
 
     pkcs7 = d2i_PKCS7_bio(bp, NULL);
     if (!pkcs7) {
+        LOGD("scep: pkiMessage: invalid PKCS7 structure");
         return NULL;
     }
 
     if (!PKCS7_type_is_signed(pkcs7) || PKCS7_is_detached(pkcs7)) {
+        LOGD("scep: pkiMessage: invalid PKCS7 structure type");
         PKCS7_free(pkcs7);
         return NULL;
     }
 
     signers = PKCS7_get_signer_info(pkcs7); /* Internal */
     if (sk_PKCS7_SIGNER_INFO_num(signers) <= 0) {
+        LOGD("scep: pkiMessage: unsigned PKCS7 structure");
         PKCS7_free(pkcs7);
         return NULL;
     }
 
     rbp = PKCS7_dataInit(pkcs7, NULL);
     if (!rbp) {
+        LOGD("scep: pkiMessage: no encapsulated message");
         PKCS7_free(pkcs7);
         return NULL;
     }
@@ -943,6 +950,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
     /* We only use the first signer even if there're multiple */
     signer = sk_PKCS7_SIGNER_INFO_value(signers, 0); /* Internal */
     if (scep_PKCS7_SIGNER_INFO_check_algo(signer)) {
+        LOGD("scep: pkiMessage: unacceptable encapsulated message signing algorithm");
         BIO_free_all(wbp);
         BIO_free_all(rbp);
         PKCS7_free(pkcs7);
@@ -951,6 +959,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
 
     cert = PKCS7_cert_from_signer_info(pkcs7, signer); /* Internal */
     if (!cert || scep_check_signature_algo(X509_get_signature_nid(cert))) {
+        LOGD("scep: pkiMessage: unacceptable signer certificate signing algorithm");
         BIO_free_all(wbp);
         BIO_free_all(rbp);
         PKCS7_free(pkcs7);
@@ -958,6 +967,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
     }
 
     if (PKCS7_signatureVerify(rbp, pkcs7, signer, cert) != 1) {
+        LOGD("scep: pkiMessage: invalid signature of signed message");
         BIO_free_all(wbp);
         BIO_free_all(rbp);
         PKCS7_free(pkcs7);
@@ -974,7 +984,13 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
     }
 
     signbits = scep_get_rsa_key_bits(signkey);
-    if (signbits < SCEP_RSA_MIN_BITS) {
+    if (signbits < 0) {
+        LOGD("scep: pkiMessage: unacceptable signing key");
+        BIO_free_all(wbp);
+        PKCS7_free(pkcs7);
+        return NULL;
+    } else if (signbits < SCEP_RSA_MIN_BITS) {
+        LOGD("scep: pkiMessage: unacceptable signing key strength: %d", signbits);
         BIO_free_all(wbp);
         PKCS7_free(pkcs7);
         return NULL;
@@ -983,13 +999,17 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
     /* Fail uncompliant client exposing secret information */
     if (PKCS7_get_signed_attribute(signer, NID_pkcs9_challengePassword)) {
         if (!scep->configure.tolerate_exposed_challenge_password) {
+            LOGD("scep: pkiMessage: exposed challenge password");
             BIO_free_all(wbp);
             PKCS7_free(pkcs7);
             return NULL;
         }
+
+        LOGD("scep: pkiMessage: exposed challenge password (tolerated)");
     }
 
     if (scep_decrypt(scep, &wbp)) {
+        LOGD("scep: pkiMessage: failed to decrypt encapsulated message");
         BIO_free_all(wbp);
         PKCS7_free(pkcs7);
         return NULL;
@@ -1006,6 +1026,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
 
     memset(m, 0, sizeof(*m));
     if (scep_pkiMessage_get_attributes(scep, &m->auth_attr, auth_attr)) {
+        LOGD("scep: pkiMessage: unable to get encapsulated attributes");
         free(m);
         BIO_free_all(wbp);
         PKCS7_free(pkcs7);
@@ -1013,12 +1034,14 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
     }
 
     if (scep_pkiMessage_set_type(m)) {
+        LOGD("scep: pkiMessage: unsupported pkiMessage type");
         free(m);
         BIO_free_all(wbp);
         PKCS7_free(pkcs7);
         return NULL;
     }
 
+    LOGD("scep: pkiMessage: successfully parsed type [%d]", m->messageType);
     m->payload = wbp;
     m->signer = cert;
     m->pkcs7 = pkcs7;
@@ -1073,6 +1096,24 @@ static int scep_unhex(unsigned char *s, unsigned int len, unsigned char *o)
 
     return 0;
 }
+
+#ifndef NDEBUG
+static void scep_hex(const void *buffer, size_t length, void *output)
+{
+    static const char H[] = "0123456789ABCDEF";
+    const unsigned char *in;
+    char *out;
+    size_t i;
+
+    in = (const unsigned char *)buffer;
+    out = (char *)output;
+
+    for (i = 0; i < length; ++i) {
+        out[i * 2 + 0] = H[in[i] / 16];
+        out[i * 2 + 1] = H[in[i] % 16];
+    }
+}
+#endif
 
 static int scep_check_transactionID(
         struct scep *scep,
@@ -1133,6 +1174,14 @@ static int scep_check_transactionID(
 
     X509_free(x509);
     if (memcmp(expected, actual, len)) {
+#ifndef NDEBUG
+        char ebuf[EVP_MAX_MD_SIZE * 2];
+        char abuf[EVP_MAX_MD_SIZE * 2];
+        scep_hex(expected, len, ebuf);
+        scep_hex(actual, len, abuf);
+        LOGD("scep: invalid transactionID: expected=%.*s actual=%.*s",
+                (int)(len * 2), ebuf, (int)(len * 2), abuf);
+#endif
         return -1;
     }
 
@@ -1197,6 +1246,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
         return NULL;
     }
 
+    /* TODO: a different trust store can be used */
     valid = scep_verify(scep->cert, m->signer);
     if (valid < 0) {
         return NULL;
@@ -1204,6 +1254,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
 
     a = &m->auth_attr;
     if (!a->transactionID || !a->messageType || !a->senderNonce) {
+        LOGD("scep: PKCSReq: missing contain mandatory attributes");
         return NULL;
     }
 
@@ -1219,6 +1270,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
 
     csr = d2i_X509_REQ_bio(robp, NULL);
     if (!csr) {
+        LOGD("scep: PKCSReq: missing valid CSR");
         BIO_free_all(robp);
         return NULL;
     }
@@ -1231,17 +1283,20 @@ struct scep_PKCSReq *scep_PKCSReq_new(
         !(subject = X509_REQ_get_subject_name(csr))                 ||
         X509_NAME_get_index_by_NID(subject, NID_commonName, -1) < 0 ){
 
+        LOGD("scep: PKCSReq: invalid CSR");
         X509_REQ_free(csr);
         return NULL;
     }
 
     if (X509_REQ_verify(csr, pkey) != 1) {
+        LOGD("scep: PKCSReq: CSR is not self signed");
         X509_REQ_free(csr);
         return NULL;
     }
 
     /* Enrollment, well formed transactionID is expected */
     if (scep_check_transactionID(scep, csr, a->transactionID)) {
+        LOGD("scep: PKCSReq: unacceptable transactionID");
         X509_REQ_free(csr);
         return NULL;
     }
@@ -1253,6 +1308,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
         return NULL;
     }
 
+    LOGD("scep: PKCSReq: successfully parsed");
     memset(req, 0, sizeof(*req));
     req->challengePassword = cp;
     req->csrkey = csrkey;

@@ -36,7 +36,7 @@ main.c.o: main.c scep.h httpd.h logger.h
 scep.c.o: scep.c scep.h logger.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
 
-httpd.c.o: httpd.c httpd.h
+httpd.c.o: httpd.c httpd.h logger.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
 
 logger.c.o: logger.c logger.h

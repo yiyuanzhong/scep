@@ -10,6 +10,8 @@
 
 #include <microhttpd.h>
 
+#include "logger.h"
+
 #define BOOL int
 #define TRUE   1
 #define FALSE  0
@@ -235,6 +237,7 @@ static enum MHD_Result httpd_standard_response(
         return MHD_NO;
     }
 
+    LOGD("http: standard response %u is sent", status_code);
     ret = MHD_queue_response(connection, status_code, r);
     MHD_destroy_response(r);
     return ret;
@@ -408,6 +411,8 @@ static MHD_RESULT httpd_handler(
                 NULL, FALSE);
     }
 
+    LOGD("http: %s %s?operation=%s %s", method, url, operation, version);
+
     if (strcmp(method, MHD_HTTP_METHOD_GET) == 0) {
         message = MHD_lookup_connection_value(
                 connection, MHD_GET_ARGUMENT_KIND, "message");
@@ -483,6 +488,7 @@ static MHD_RESULT httpd_handler(
     }
 
     result = MHD_queue_response(connection, status, r);
+    LOGD("http: user response (%s) is sent", rct);
     MHD_destroy_response(r);
     return result;
 }

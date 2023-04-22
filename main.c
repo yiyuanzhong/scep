@@ -53,10 +53,17 @@ static int validate_validity(time_t now, const X509 *x509, long days)
 
     when = X509_get0_notBefore(x509);
     if (ASN1_TIME_cmp_time_t(when, now) > 0) {
+        LOGD("scep: signing certificate is not valid yet");
         return 0;
     }
 
     when = X509_get0_notAfter(x509);
+    if (ASN1_TIME_cmp_time_t(when, now) < 0) { /* Expired */
+        LOGD("scep: signing certificate has expired already");
+        return 0;
+    }
+
+    LOGD("scep: signing certificate is valid");
     if (days > 0) {
         ts = ASN1_TIME_new();
         if (!ts) {
@@ -68,22 +75,14 @@ static int validate_validity(time_t now, const X509 *x509, long days)
             return -1;
         }
 
-        if (ASN1_TIME_cmp_time_t(when, now) < 0 || /* Expired */
-            ASN1_TIME_compare(when, ts) > 0     ){ /* Still valid */
-
+        if (ASN1_TIME_compare(when, ts) > 0) {
+            LOGD("scep: signing certificate is not within renewal window");
             ASN1_TIME_free(ts);
             return 0;
         }
 
-        LOGI("good renewal");
         ASN1_TIME_free(ts);
-
-    } else {
-        if (ASN1_TIME_cmp_time_t(when, now) < 0) { /* Expired */
-            return 0;
-        }
-
-        LOGI("good anytime renewal");
+        LOGD("scep: signing certificate is within renewal window");
     }
 
     return 1;
@@ -371,7 +370,7 @@ static int validate_cp(
     return 1;
 }
 
-static int validate_subject(const X509_REQ *csr, const X509 *signer)
+static int compare_subject(const X509_REQ *csr, const X509 *signer)
 {
     int ret;
 
@@ -449,6 +448,27 @@ static int check_duplicate(
     return 0;
 }
 
+static int validate_valid_certificate(
+        time_t now,
+        struct context *ctx,
+        const X509_REQ *csr,
+        const X509 *signer)
+{
+    int ret;
+
+    ret = compare_subject(csr, signer);
+    if (ret <= 0) {
+        LOGD("scep: signer requested a different identity");
+        return ret;
+    }
+
+    LOGD("scep: signer is the same identity as the CSR");
+
+    /* TODO: I should check if SAN matches here as well */
+
+    return validate_validity(now, signer, ctx->allow_renew_days);
+}
+
 static int validate(
         time_t now,
         struct context *ctx,
@@ -459,52 +479,36 @@ static int validate(
 {
     int ret;
 
+    *challenged = 0;
+
+    if (signer) { /* The subject is signed by a trusted CA */
+        LOGD("scep: subject is signed by a trusted CA");
+        return validate_valid_certificate(now, ctx, csr, signer);
+    }
+
     /* The idea is to check subject and SAN together with challenge password,
      * but since I haven't implemented authenticated challenge passwords for
      * SAN, only subject is being checked */
 
-    *challenged = 0;
     if (!ctx->challenge_password || !*ctx->challenge_password) {
         LOGD("scep: challenge not required");
+        *challenged = -1;
         return 1;
     }
 
-    if (cp) {
-        ret = validate_cp(now, ctx, csr, cp);
-        if (ret < 0) {
-            return -1;
-        } else if (ret > 0) {
-            *challenged = 1;
-            return 1;
-        }
-    }
-
-    LOGD("scep: no valid challenge password found");
-    if (!signer) {
-        LOGD("scep: signer is not using a valid certificate");
+    if (!cp) {
+        LOGD("scep: no challenge password provided");
         return 0;
     }
 
-    LOGD("scep: signer is using a trusted certificate from an authorized CA");
-
-    ret = validate_subject(csr, signer);
-    if (ret <= 0) {
-        LOGD("scep: signer requested a different identity");
-        return ret;
+    ret = validate_cp(now, ctx, csr, cp);
+    if (ret == 0) {
+        LOGD("scep: no valid challenge password found");
+    } else if (ret > 0) {
+        *challenged = 1;
     }
 
-    LOGD("scep: signer is the same identity as the CSR");
-
-    /* I should check if SAN matches here as well */
-
-    ret = validate_validity(now, signer, ctx->allow_renew_days);
-    if (ret <= 0) {
-        LOGD("scep: signing certificate has expired already");
-        return ret;
-    }
-
-    LOGD("scep: request is signed by a still valid certificate");
-    return 1;
+    return ret;
 }
 
 static unsigned int handle_GetCACaps(
@@ -703,7 +707,7 @@ static unsigned int handle_PKIOperation(
         rep = scep_CertRep_reject(scep, req, failInfo_badRequest);
 
     } else {
-        if (challenged) {
+        if (challenged > 0) {
             cpr = check_duplicate(ctx, cp, csrkey, &existing);
             if (cpr < 0) {
                 scep_PKCSReq_free(req);
@@ -727,6 +731,10 @@ static unsigned int handle_PKIOperation(
                 LOGI("scep: PKCSReq authorized by challenge password");
                 rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
             }
+
+        } else if (challenged < 0) {
+            LOGI("scep: PKCSReq authorized without credential");
+            rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
 
         } else {
             LOGI("scep: PKCSReq authorized by valid certificate");

@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <string.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <unistd.h>
@@ -385,12 +387,75 @@ static int validate_subject(const X509_REQ *csr, const X509 *signer)
     }
 }
 
+static int check_duplicate(
+        struct context *ctx,
+        const ASN1_PRINTABLESTRING *cp,
+        const EVP_PKEY *csrkey,
+        X509 **existing)
+{
+    char link[PATH_MAX];
+    EVP_PKEY *pkey;
+    X509 *x509;
+    int ret;
+    BIO *bp;
+    int fd;
+
+    *existing = NULL;
+    if (!ctx->depot) {
+        return 0;
+    }
+
+    ret = snprintf(link, sizeof(link), "%.*s.lnk", cp->length, cp->data);
+    if (ret < 0 || (size_t)ret >= sizeof(link)) {
+        return -1;
+    }
+
+    fd = open(link, O_RDONLY | O_NOCTTY);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            return 0;
+        } else {
+            LOGW("Failed to open %s: %d: %s", link, errno, strerror(errno));
+            return -1;
+        }
+    }
+
+    bp = BIO_new_fd(fd, BIO_CLOSE);
+    if (!bp) {
+        close(fd);
+        return -1;
+    }
+
+    x509 = PEM_read_bio_X509(bp, NULL, NULL, NULL);
+    if (!x509) {
+        BIO_free_all(bp);
+        return -1;
+    }
+
+    BIO_free_all(bp);
+
+    pkey = X509_get0_pubkey(x509);
+    if (!pkey) {
+        X509_free(x509);
+        return 1;
+    }
+
+    if (EVP_PKEY_cmp(pkey, csrkey) != 1) {
+        X509_free(x509);
+        return 1;
+    }
+
+    *existing = x509;
+    return 0;
+}
+
 static int validate(
         time_t now,
         struct context *ctx,
         const X509_REQ *csr,
         const ASN1_PRINTABLESTRING *cp,
-        const X509 *signer)
+        const X509 *signer,
+        int *challenged)
 {
     int ret;
 
@@ -398,6 +463,7 @@ static int validate(
      * but since I haven't implemented authenticated challenge passwords for
      * SAN, only subject is being checked */
 
+    *challenged = 0;
     if (!ctx->challenge_password || !*ctx->challenge_password) {
         LOGD("scep: challenge not required");
         return 1;
@@ -405,8 +471,11 @@ static int validate(
 
     if (cp) {
         ret = validate_cp(now, ctx, csr, cp);
-        if (ret) {
-            return ret;
+        if (ret < 0) {
+            return -1;
+        } else if (ret > 0) {
+            *challenged = 1;
+            return 1;
         }
     }
 
@@ -483,10 +552,13 @@ static unsigned int handle_GetCACert(
     return MHD_HTTP_OK;
 }
 
-static int save_subject(const char *depot, struct scep_CertRep *rep)
+static int save_subject(
+        struct scep_CertRep *rep,
+        const ASN1_PRINTABLESTRING *cp)
 {
     const ASN1_INTEGER *sn;
     char file[PATH_MAX];
+    char link[PATH_MAX];
     X509 *subject;
     char *serial;
     BIGNUM *bn;
@@ -516,7 +588,7 @@ static int save_subject(const char *depot, struct scep_CertRep *rep)
 
     BN_free(bn);
 
-    ret = snprintf(file, sizeof(file), "%s/%s.pem", depot, serial);
+    ret = snprintf(file, sizeof(file), "%s.pem", serial);
     if (ret < 0 || (size_t)ret >= sizeof(file)) {
         OPENSSL_free(serial);
         return -1;
@@ -536,6 +608,19 @@ static int save_subject(const char *depot, struct scep_CertRep *rep)
     }
 
     BIO_free_all(bp);
+
+    if (cp) {
+        ret = snprintf(link, sizeof(link), "%.*s.lnk", cp->length, cp->data);
+        if (ret < 0 || (size_t)ret >= sizeof(link)) {
+            return -1;
+        }
+
+        if (symlink(file, link)) {
+            LOGW("symlink(): %d: %s", errno, strerror(errno));
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -549,11 +634,15 @@ static unsigned int handle_PKIOperation(
     struct scep_pkiMessage *m;
     struct scep_PKCSReq *req;
     struct scep_CertRep *rep;
+    const EVP_PKEY *csrkey;
     const X509_REQ *csr;
     const X509 *signer;
     struct scep *scep;
+    X509 *existing;
+    int challenged;
     time_t now;
     int ret;
+    int cpr;
 
 #ifndef NDEBUG
     char buffer[1024];
@@ -582,22 +671,27 @@ static unsigned int handle_PKIOperation(
     }
 
     csr = scep_PKCSReq_get_csr(req);
+    csrkey = scep_PKCSReq_get_csr_key(req);
     cp = scep_PKCSReq_get_challengePassword(req);
     signer = scep_PKCSReq_get_current_certificate(req);
 
 #ifndef NDEBUG
-    if (X509_NAME_oneline(X509_REQ_get_subject_name(csr), buffer, sizeof(buffer))) {
+    if (X509_NAME_oneline(X509_REQ_get_subject_name(csr),
+                          buffer, sizeof(buffer))) {
+
         LOGD("scep: CSR subject: %s", buffer);
     }
 
     if (signer) {
-        if (X509_NAME_oneline(X509_get_subject_name(signer), buffer, sizeof(buffer))) {
+        if (X509_NAME_oneline(X509_get_subject_name(signer),
+                              buffer, sizeof(buffer))) {
+
             LOGD("scep: signer subject: %s", buffer);
         }
     }
 #endif
 
-    ret = validate(now, ctx, csr, cp, signer);
+    ret = validate(now, ctx, csr, cp, signer, &challenged);
     if (ret < 0) {
         scep_PKCSReq_free(req);
         scep_pkiMessage_free(m);
@@ -608,8 +702,35 @@ static unsigned int handle_PKIOperation(
         rep = scep_CertRep_reject(scep, req, failInfo_badRequest);
 
     } else {
-        LOGI("scep: PKCSReq authorized");
-        rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
+        if (challenged) {
+            cpr = check_duplicate(ctx, cp, csrkey, &existing);
+            if (cpr < 0) {
+                scep_PKCSReq_free(req);
+                scep_pkiMessage_free(m);
+                return MHD_HTTP_INTERNAL_SERVER_ERROR;
+
+            } else if (cpr > 0) {
+                ret = 0;
+                LOGW("scep: PKCSReq replay but new key is seen");
+                rep = scep_CertRep_reject(scep, req, failInfo_badRequest);
+
+            } else if (existing) {
+                ret = 0;
+                LOGI("scep: PKCSReq replay, return previous certificate");
+                rep = scep_CertRep_new_with(scep, req, existing);
+                if (!rep) {
+                    X509_free(existing);
+                }
+
+            } else {
+                LOGI("scep: PKCSReq authorized by challenge password");
+                rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
+            }
+
+        } else {
+            LOGI("scep: PKCSReq authorized by valid certificate");
+            rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
+        }
     }
 
     if (!rep) {
@@ -618,17 +739,15 @@ static unsigned int handle_PKIOperation(
         return MHD_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    scep_PKCSReq_free(req);
-    scep_pkiMessage_free(m);
-    if (ret > 0) {
-        if (ctx->depot && *ctx->depot) {
-            if (save_subject(ctx->depot, rep)) {
-                scep_CertRep_free(rep);
-                return MHD_HTTP_INTERNAL_SERVER_ERROR;
-            }
-        }
+    if (ret > 0 && ctx->depot && save_subject(rep, cp)) {
+        scep_CertRep_free(rep);
+        scep_PKCSReq_free(req);
+        scep_pkiMessage_free(m);
+        return MHD_HTTP_INTERNAL_SERVER_ERROR;
     }
 
+    scep_PKCSReq_free(req);
+    scep_pkiMessage_free(m);
     if (scep_CertRep_save(rep, response)) {
         scep_CertRep_free(rep);
         return MHD_HTTP_INTERNAL_SERVER_ERROR;
@@ -885,7 +1004,10 @@ int main(int argc, char *argv[])
     memset(&ctx, 0, sizeof(ctx));
     memset(&configure, 0, sizeof(configure));
 
-    ctx.depot = arg_dpot;
+    if (arg_dpot && *arg_dpot) {
+        ctx.depot = arg_dpot;
+    }
+
     ctx.challenge_password = arg_chlg;
     configure.no_validate_transaction_id = trans_id;
     configure.tolerate_exposed_challenge_password = exposed;
@@ -928,6 +1050,16 @@ int main(int argc, char *argv[])
 
     if (arg_exts) {
         if (scep_load_subject_extensions(scep, arg_exts)) {
+            scep_free(scep);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* All files loaded, move into depot */
+    if (ctx.depot) {
+        if (chdir(ctx.depot)) {
+            LOGE("Failed to change to depot directory: %d: %s",
+                    errno, strerror(errno));
             scep_free(scep);
             return EXIT_FAILURE;
         }

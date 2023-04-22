@@ -39,7 +39,7 @@ struct scep_configure { /* memset() to 0 for all default */
     /* macOS bug, challenge password is in pkcsPKIEnvelope unencrypted */
     int tolerate_exposed_challenge_password;
 
-    /* transactionID is usually the hash of the pubkey, but not always the case */
+    /* transactionID is the hash of the pubkey but not always the case */
     int no_validate_transaction_id;
 };
 
@@ -74,13 +74,14 @@ extern enum messageType scep_pkiMessage_get_type(
 
 extern void scep_pkiMessage_free(struct scep_pkiMessage *m);
 
+/* Returned object is owned by scep_pkiMessage, don't free it */
 extern struct scep_PKCSReq *scep_PKCSReq_new(
         struct scep *scep, struct scep_pkiMessage *m);
 
 extern void scep_PKCSReq_free(struct scep_PKCSReq *req);
 
 extern const X509_REQ *scep_PKCSReq_get_csr(const struct scep_PKCSReq *req);
-extern const RSA *scep_PKCSReq_get_csr_key(const struct scep_PKCSReq *req);
+extern const EVP_PKEY *scep_PKCSReq_get_csr_key(const struct scep_PKCSReq *req);
 
 extern const ASN1_PRINTABLESTRING *scep_PKCSReq_get_challengePassword(
         const struct scep_PKCSReq *req);
@@ -98,6 +99,11 @@ extern struct scep_CertRep *scep_CertRep_new(
         struct scep_PKCSReq *req,
         time_t now,
         long days);
+
+extern struct scep_CertRep *scep_CertRep_new_with(
+        struct scep *scep,
+        struct scep_PKCSReq *req,
+        X509 *subject); /* Ownership taken if succeeded */
 
 extern struct scep_CertRep *scep_CertRep_reject(
         struct scep *scep,

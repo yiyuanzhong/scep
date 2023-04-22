@@ -56,25 +56,27 @@ struct scep_pkiMessage_attributes {
 };
 
 struct scep_pkiMessage {
-    PKCS7 *pkcs7;
-    BIO *payload;
-    X509 *signer;
+    PKCS7 *pkcs7; /* Owned by this */
+    BIO *payload; /* Owned by this */
+    X509 *signer; /* Owned by this->pkcs7 */
+
     enum messageType messageType;
 
-    struct scep_pkiMessage_attributes auth_attr;
+    struct scep_pkiMessage_attributes auth_attr; /* Owned by this->pkcs7 */
 };
 
 struct scep_PKCSReq {
-    struct scep_pkiMessage *m;
-    X509_REQ *csr;
-    RSA *csrkey;
-    int valid;
-    ASN1_PRINTABLESTRING *challengePassword;
+    const struct scep_pkiMessage *m; /* Owns this */
+
+    int signer_certificate_is_valid;
+    X509_REQ *csr; /* Owned by this */
+    const EVP_PKEY *csrkey; /* Owned by this->csr */
+    const ASN1_PRINTABLESTRING *challengePassword; /* Owned by this->csr */
 };
 
 struct scep_CertRep {
-    PKCS7 *pkcs7;
-    X509 *cert;
+    PKCS7 *pkcs7; /* Owned by this */
+    X509 *cert; /* Owned by this */
 };
 
 static char *trim(char *s)
@@ -950,7 +952,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
     /* We only use the first signer even if there're multiple */
     signer = sk_PKCS7_SIGNER_INFO_value(signers, 0); /* Internal */
     if (scep_PKCS7_SIGNER_INFO_check_algo(signer)) {
-        LOGD("scep: pkiMessage: unacceptable encapsulated message signing algorithm");
+        LOGD("scep: pkiMessage: weak encapsulated message signing algorithm");
         BIO_free_all(wbp);
         BIO_free_all(rbp);
         PKCS7_free(pkcs7);
@@ -959,7 +961,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
 
     cert = PKCS7_cert_from_signer_info(pkcs7, signer); /* Internal */
     if (!cert || scep_check_signature_algo(X509_get_signature_nid(cert))) {
-        LOGD("scep: pkiMessage: unacceptable signer certificate signing algorithm");
+        LOGD("scep: pkiMessage: weak signer certificate signing algorithm");
         BIO_free_all(wbp);
         BIO_free_all(rbp);
         PKCS7_free(pkcs7);
@@ -990,7 +992,7 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
         PKCS7_free(pkcs7);
         return NULL;
     } else if (signbits < SCEP_RSA_MIN_BITS) {
-        LOGD("scep: pkiMessage: unacceptable signing key strength: %d", signbits);
+        LOGD("scep: pkiMessage: weak signing key length: %d", signbits);
         BIO_free_all(wbp);
         PKCS7_free(pkcs7);
         return NULL;
@@ -1234,10 +1236,10 @@ struct scep_PKCSReq *scep_PKCSReq_new(
     ASN1_PRINTABLESTRING *cp;
     struct scep_PKCSReq *req;
     X509_NAME *subject;
+    EVP_PKEY *csrkey;
     EVP_PKEY *pkey;
     BUF_MEM *bptr;
     X509_REQ *csr;
-    RSA *csrkey;
     int csrbits;
     BIO *robp;
     int valid;
@@ -1279,7 +1281,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
 
     if (!(pkey = X509_REQ_get0_pubkey(csr))                         ||
         (csrbits = scep_get_rsa_key_bits(pkey)) < SCEP_RSA_MIN_BITS ||
-        !(csrkey = EVP_PKEY_get0_RSA(X509_REQ_get0_pubkey(csr)))    ||
+        !(csrkey = X509_REQ_get0_pubkey(csr))                       ||
         !(subject = X509_REQ_get_subject_name(csr))                 ||
         X509_NAME_get_index_by_NID(subject, NID_commonName, -1) < 0 ){
 
@@ -1310,9 +1312,9 @@ struct scep_PKCSReq *scep_PKCSReq_new(
 
     LOGD("scep: PKCSReq: successfully parsed");
     memset(req, 0, sizeof(*req));
+    req->signer_certificate_is_valid = valid;
     req->challengePassword = cp;
     req->csrkey = csrkey;
-    req->valid = valid;
     req->csr = csr;
     req->m = m;
     return req;
@@ -1779,8 +1781,38 @@ static PKCS7 *scep_CertRep_seal(
     return pkcs7;
 }
 
+struct scep_CertRep *scep_CertRep_new_with(
+        struct scep *scep,
+        struct scep_PKCSReq *req,
+        X509 *subject)
+{
+    struct scep_CertRep *rep;
+
+    if (!scep || !scep->cert || !scep->pkey || !req || !subject) {
+        return NULL;
+    }
+
+    rep = (struct scep_CertRep *)malloc(sizeof(*rep));
+    if (!rep) {
+        return NULL;
+    }
+
+    memset(rep, 0, sizeof(*rep));
+    rep->cert = subject;
+    rep->pkcs7 = scep_CertRep_seal(scep, req, "0", NULL, subject);
+    if (!rep->pkcs7) {
+        free(rep);
+        return NULL;
+    }
+
+    return rep;
+}
+
 struct scep_CertRep *scep_CertRep_new(
-        struct scep *scep, struct scep_PKCSReq *req, time_t now, long days)
+        struct scep *scep,
+        struct scep_PKCSReq *req,
+        time_t now,
+        long days)
 {
     struct scep_CertRep *rep;
     X509_NAME *name;
@@ -1823,17 +1855,8 @@ struct scep_CertRep *scep_CertRep_new(
         return NULL;
     }
 
-    rep = (struct scep_CertRep *)malloc(sizeof(*rep));
+    rep = scep_CertRep_new_with(scep, req, subject);
     if (!rep) {
-        X509_free(subject);
-        return NULL;
-    }
-
-    memset(rep, 0, sizeof(*rep));
-    rep->cert = subject;
-    rep->pkcs7 = scep_CertRep_seal(scep, req, "0", NULL, subject);
-    if (!rep->pkcs7) {
-        free(rep);
         X509_free(subject);
         return NULL;
     }
@@ -1949,7 +1972,7 @@ const ASN1_PRINTABLESTRING *scep_PKCSReq_get_challengePassword(
     return req->challengePassword;
 }
 
-const RSA *scep_PKCSReq_get_csr_key(const struct scep_PKCSReq *req)
+const EVP_PKEY *scep_PKCSReq_get_csr_key(const struct scep_PKCSReq *req)
 {
     if (!req) {
         return NULL;
@@ -1961,7 +1984,7 @@ const RSA *scep_PKCSReq_get_csr_key(const struct scep_PKCSReq *req)
 const X509 *scep_PKCSReq_get_current_certificate(
         const struct scep_PKCSReq *req)
 {
-    if (!req || !req->valid) {
+    if (!req || !req->signer_certificate_is_valid) {
         return NULL;
     }
 

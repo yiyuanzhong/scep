@@ -14,9 +14,10 @@ struct scep_CertRep;
 struct scep_pkiMessage;
 
 enum messageType {
-    messageType_PKCSReq         = 19,
     messageType_CertRep         = 3,
-    messageType_GetCertInitial  = 20,
+    messageType_RenewalReq      = 17,
+    messageType_PKCSReq         = 19,
+    messageType_CertPoll        = 20,
     messageType_GetCert         = 21,
     messageType_GetCRL          = 22,
 };

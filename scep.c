@@ -859,11 +859,14 @@ static int scep_pkiMessage_set_type(struct scep_pkiMessage *m)
             return 0;
         }
     } else if (mt->length == 2) {
-        if (memcmp(mt->data, "19", 2) == 0) {
+        if (memcmp(mt->data, "17", 2) == 0) {
+            m->messageType = messageType_RenewalReq;
+            return 0;
+        } else if (memcmp(mt->data, "19", 2) == 0) {
             m->messageType = messageType_PKCSReq;
             return 0;
         } else if (memcmp(mt->data, "20", 2) == 0) {
-            m->messageType = messageType_GetCertInitial;
+            m->messageType = messageType_CertPoll;
             return 0;
         } else if (memcmp(mt->data, "21", 2) == 0) {
             m->messageType = messageType_GetCert;

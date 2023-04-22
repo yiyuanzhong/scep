@@ -657,6 +657,7 @@ static unsigned int handle_PKIOperation(
     }
 
     switch (scep_pkiMessage_get_type(m)) {
+    case messageType_RenewalReq:
     case messageType_PKCSReq:
         break;
     default:

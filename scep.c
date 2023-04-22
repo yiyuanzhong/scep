@@ -1263,10 +1263,6 @@ struct scep_PKCSReq *scep_PKCSReq_new(
         return NULL;
     }
 
-    if (memcmp(a->messageType->data, "19", a->messageType->length)) {
-        return NULL;
-    }
-
     BIO_get_mem_ptr(m->payload, &bptr);
     robp = BIO_new_mem_buf(bptr->data, bptr->length);
     if (!robp) {

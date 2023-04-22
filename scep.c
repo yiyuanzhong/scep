@@ -44,6 +44,8 @@ struct scep {
     const EVP_MD *md;
     STACK_OF(X509) *chain;
     struct scep_extension *extensions;
+
+    X509_STORE *store; /* For verifying certificates issued by trusted CAs */
 };
 
 struct scep_pkiMessage_attributes {
@@ -266,6 +268,10 @@ void scep_free(struct scep *scep)
     int num;
     int i;
 
+    if (scep->store) {
+        X509_STORE_free(scep->store);
+    }
+
     if (scep->chain) { /* Signing cert is included */
         assert(scep->pkey);
         EVP_PKEY_free(scep->pkey);
@@ -404,6 +410,7 @@ int scep_load_certificate(
         const char *keypass)
 {
     STACK_OF(X509) *chain;
+    X509_STORE *store;
     const EVP_MD *md;
     EVP_PKEY *pkey;
     X509 *cert;
@@ -452,11 +459,29 @@ int scep_load_certificate(
         return -1;
     }
 
+    store = X509_STORE_new();
+    if (!store) {
+        sk_X509_free(chain);
+        EVP_PKEY_free(pkey);
+        X509_free(cert);
+        return -1;
+    }
+
+    if (X509_STORE_add_cert(store, cert) != 1) {
+        X509_STORE_free(store);
+        sk_X509_free(chain);
+        EVP_PKEY_free(pkey);
+        X509_free(cert);
+        return -1;
+    }
+
+    assert(!scep->store);
     assert(!scep->chain);
     assert(!scep->cert);
     assert(!scep->pkey);
     assert(!scep->md);
 
+    scep->store = store;
     scep->chain = chain;
     scep->cert = cert;
     scep->pkey = pkey;
@@ -469,7 +494,6 @@ int scep_load_certificate_chain(
         const char *certfile,
         int certpem)
 {
-    STACK_OF(X509) *chain;
     X509 *cert;
 
     if (!scep || !scep->cert) {
@@ -481,27 +505,35 @@ int scep_load_certificate_chain(
         return -1;
     }
 
-    if (scep->chain) {
-        if (sk_X509_push(scep->chain, cert) == 0) {
-            X509_free(cert);
-            return -1;
-        }
+    assert(scep->chain);
+    if (sk_X509_push(scep->chain, cert) <= 0) {
+        X509_free(cert);
+        return -1;
+    }
 
-    } else {
-        chain = sk_X509_new_null();
-        if (!chain) {
-            return -1;
-        }
+    return 0;
+}
 
-        if (sk_X509_push(chain, scep->cert) == 0 ||
-            sk_X509_push(chain, cert) == 0       ){
+int scep_load_other_ca_certificate(
+        struct scep *scep,
+        const char *certfile,
+        int certpem)
+{
+    X509 *cert;
 
-            sk_X509_free(chain);
-            X509_free(cert);
-            return -1;
-        }
+    if (!scep || !scep->cert) {
+        return -1;
+    }
 
-        scep->chain = chain;
+    cert = scep_load_certificate_only(certfile, certpem, NULL);
+    if (!cert) {
+        return -1;
+    }
+
+    assert(scep->store);
+    if (X509_STORE_add_cert(scep->store, cert) != 1) {
+        X509_free(cert);
+        return -1;
     }
 
     return 0;
@@ -1214,41 +1246,26 @@ static int scep_check_transactionID(
     return 0;
 }
 
-static int scep_verify(X509 *issuer, X509 *subject)
+static int scep_verify(X509_STORE *store, X509 *subject)
 {
     X509_STORE_CTX *ctx;
-    X509_STORE *store;
-
-    store = X509_STORE_new();
-    if (!store) {
-        return -1;
-    }
-
-    if (X509_STORE_add_cert(store, issuer) != 1) {
-        X509_STORE_free(store);
-        return -1;
-    }
 
     ctx = X509_STORE_CTX_new();
     if (!ctx) {
-        X509_STORE_free(store);
         return -1;
     }
 
     if (X509_STORE_CTX_init(ctx, store, subject, NULL) != 1) {
         X509_STORE_CTX_free(ctx);
-        X509_STORE_free(store);
         return -1;
     }
 
     if (X509_verify_cert(ctx) != 1) {
         X509_STORE_CTX_free(ctx);
-        X509_STORE_free(store);
         return 0;
     }
 
     X509_STORE_CTX_free(ctx);
-    X509_STORE_free(store);
     return 1;
 }
 
@@ -1273,7 +1290,7 @@ struct scep_PKCSReq *scep_PKCSReq_new(
     }
 
     /* TODO: a different trust store can be used */
-    valid = scep_verify(scep->cert, m->signer);
+    valid = scep_verify(scep->store, m->signer);
     if (valid < 0) {
         return NULL;
     }

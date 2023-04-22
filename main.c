@@ -914,10 +914,11 @@ int main(int argc, char *argv[])
     int cfrm;
     int lfrm;
     int kfrm;
+    int ofrm;
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:ETh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:o:O:ETh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -933,6 +934,8 @@ int main(int argc, char *argv[])
         { "extensions", required_argument, NULL, 'e' },
         { "chain",      required_argument, NULL, 'l' },
         { "chainform",  required_argument, NULL, 'L' },
+        { "otherca",    required_argument, NULL, 'o' },
+        { "othercaform",required_argument, NULL, 'O' },
         { "trans_id",   no_argument,       NULL, 'T' },
         { "exposed_cp", no_argument,       NULL, 'E' },
         { "help",       no_argument,       NULL, 'h' },
@@ -952,6 +955,10 @@ int main(int argc, char *argv[])
     const char *arg_lfrm[8];
     size_t arg_links;
 
+    const char *arg_othr[8];
+    const char *arg_ofrm[8];
+    size_t arg_othrs;
+
     const char *arg_days = "90";
     const char *arg_renw = "14";
     const char *arg_cfrm = "pem";
@@ -960,8 +967,13 @@ int main(int argc, char *argv[])
     exposed = 0;
     trans_id = 0;
     arg_links = 0;
+    arg_othrs = 0;
     for (i = 0; i < sizeof(arg_link) / sizeof(*arg_link); ++i) {
         arg_lfrm[i] = "pem";
+    }
+
+    for (i = 0; i < sizeof(arg_othr) / sizeof(*arg_othr); ++i) {
+        arg_ofrm[i] = "pem";
     }
 
     while ((c = getopt_long(argc, argv, kOptString, kLongOpts, NULL)) != -1) {
@@ -988,6 +1000,16 @@ int main(int argc, char *argv[])
                 return EXIT_FAILURE;
             }
             arg_link[arg_links++] = optarg;
+            break;
+
+
+        case 'O': arg_ofrm[arg_othrs] = optarg; break;
+        case 'o':
+            if (arg_othrs + 1 == sizeof(arg_othr) / sizeof(*arg_othr)) {
+                fprintf(stderr, "Too long certificate chain\n");
+                return EXIT_FAILURE;
+            }
+            arg_othr[arg_othrs++] = optarg;
             break;
 
         default : return help(argv[0]);
@@ -1044,6 +1066,17 @@ int main(int argc, char *argv[])
         }
 
         if (scep_load_certificate_chain(scep, arg_link[i], lfrm)) {
+            scep_free(scep);
+            return EXIT_FAILURE;
+        }
+    }
+
+    for (i = 0; i < arg_othrs; ++i) {
+        if (atoform(arg_ofrm[i], &ofrm)) {
+            return help(argv[0]);
+        }
+
+        if (scep_load_other_ca_certificate(scep, arg_othr[i], ofrm)) {
             scep_free(scep);
             return EXIT_FAILURE;
         }

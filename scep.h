@@ -62,6 +62,12 @@ extern int scep_load_certificate_chain(
         const char *certfile,
         int certpem);
 
+/* Then load other trusted certificate if needed */
+extern int scep_load_other_ca_certificate(
+        struct scep *scep,
+        const char *certfile,
+        int certpem);
+
 extern int scep_load_subject_extensions(
         struct scep *scep, const char *filename);
 

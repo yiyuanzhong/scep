@@ -42,6 +42,9 @@ struct scep_configure { /* memset() to 0 for all default */
 
     /* transactionID is the hash of the pubkey but not always the case */
     int no_validate_transaction_id;
+
+    /* Copy SAN from CSR to issued certificate */
+    int set_subject_alternative_name;
 };
 
 extern struct scep *scep_new(const struct scep_configure *configure);

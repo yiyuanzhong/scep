@@ -923,10 +923,11 @@ int main(int argc, char *argv[])
     int lfrm;
     int kfrm;
     int ofrm;
+    int san;
     int ret;
     int c;
 
-    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:o:O:ETh";
+    static const char *kOptString = "p:c:k:f:F:P:C:V:R:S:d:e:l:L:o:O:ETAh";
     static const struct option kLongOpts[] = {
         { "port",       required_argument, NULL, 'p' },
         { "ca",         required_argument, NULL, 'c' },
@@ -946,6 +947,7 @@ int main(int argc, char *argv[])
         { "othercaform",required_argument, NULL, 'O' },
         { "trans_id",   no_argument,       NULL, 'T' },
         { "exposed_cp", no_argument,       NULL, 'E' },
+        { "set_san",    no_argument,       NULL, 'A' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -972,6 +974,7 @@ int main(int argc, char *argv[])
     const char *arg_cfrm = "pem";
     const char *arg_kfrm = "pem";
 
+    san = 0;
     exposed = 0;
     trans_id = 0;
     arg_links = 0;
@@ -1000,6 +1003,7 @@ int main(int argc, char *argv[])
         case 'e': arg_exts = optarg; break;
         case 'E': exposed  =      1; break;
         case 'T': trans_id =      1; break;
+        case 'A': san      =      1; break;
 
         case 'L': arg_lfrm[arg_links] = optarg; break;
         case 'l':
@@ -1040,6 +1044,7 @@ int main(int argc, char *argv[])
     }
 
     ctx.challenge_password = arg_chlg;
+    configure.set_subject_alternative_name = san;
     configure.no_validate_transaction_id = trans_id;
     configure.tolerate_exposed_challenge_password = exposed;
 

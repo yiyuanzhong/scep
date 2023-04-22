@@ -1886,9 +1886,11 @@ struct scep_CertRep *scep_CertRep_new(
         return NULL;
     }
 
-    if (scep_CertRep_set_SAN(req->csr, subject)) {
-        X509_free(subject);
-        return NULL;
+    if (scep->configure.set_subject_alternative_name) {
+        if (scep_CertRep_set_SAN(req->csr, subject)) {
+            X509_free(subject);
+            return NULL;
+        }
     }
 
     if (scep_sign(now, scep, subject, days)) {

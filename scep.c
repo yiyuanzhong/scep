@@ -1125,12 +1125,18 @@ static int scep_check_transactionID(
         X509_REQ *csr,
         ASN1_PRINTABLESTRING *transactionID)
 {
-    unsigned char expected[EVP_MAX_MD_SIZE];
-    unsigned char actual[EVP_MAX_MD_SIZE];
+    unsigned char received[EVP_MAX_MD_SIZE];
+    unsigned char hash1[EVP_MAX_MD_SIZE];
+    unsigned char hash2[EVP_MAX_MD_SIZE];
     const EVP_MD *type;
+    unsigned char *p;
     unsigned int len;
     EVP_PKEY *pkey;
-    X509 *x509;
+    int ret;
+
+#ifndef NDEBUG
+    char hex[EVP_MAX_MD_SIZE * 2];
+#endif
 
     if (transactionID->length <= 0) {
         return -1;
@@ -1144,16 +1150,21 @@ static int scep_check_transactionID(
         return -1;
     }
 
-    if (scep_unhex(transactionID->data, transactionID->length, expected)) {
+    len = transactionID->length / 2;
+    if (scep_unhex(transactionID->data, transactionID->length, received)) {
         return -1;
     }
+
+#ifndef NDEBUG
+    scep_hex(received, len, hex);
+    LOGD("scep: received transactionID: %.*s", (int)(len * 2), hex);
+#endif
 
     pkey = X509_REQ_get0_pubkey(csr); /* Internal */
     if (!pkey) {
         return -1;
     }
 
-    len = transactionID->length / 2;
     switch (len) {
     case MD5_DIGEST_LENGTH:    type = EVP_md5();    break;
     case SHA_DIGEST_LENGTH:    type = EVP_sha1();   break;
@@ -1162,31 +1173,41 @@ static int scep_check_transactionID(
     default : return -1;
     }
 
-    x509 = X509_new();
-    if (!x509) {
+    p = NULL;
+    ret = i2d_PublicKey(pkey, &p);
+    if (ret < 0) {
         return -1;
     }
 
-    if (X509_set_pubkey(x509, pkey) != 1) {
-        X509_free(x509);
+    if (EVP_Digest(p, (size_t)ret, hash1, NULL, type, NULL) != 1) {
+        OPENSSL_free(p);
         return -1;
     }
 
-    if (X509_pubkey_digest(x509, type, actual, &len) != 1) {
-        X509_free(x509);
+    OPENSSL_free(p);
+    p = NULL;
+
+    ret = i2d_PUBKEY(pkey, &p);
+    if (ret < 0) {
         return -1;
     }
 
-    X509_free(x509);
-    if (memcmp(expected, actual, len)) {
+    if (EVP_Digest(p, (size_t)ret, hash2, NULL, type, NULL) != 1) {
+        OPENSSL_free(p);
+        return -1;
+    }
+
+    OPENSSL_free(p);
+    p = NULL;
+
 #ifndef NDEBUG
-        char ebuf[EVP_MAX_MD_SIZE * 2];
-        char abuf[EVP_MAX_MD_SIZE * 2];
-        scep_hex(expected, len, ebuf);
-        scep_hex(actual, len, abuf);
-        LOGD("scep: invalid transactionID: expected=%.*s actual=%.*s",
-                (int)(len * 2), ebuf, (int)(len * 2), abuf);
+    scep_hex(hash1, len, hex);
+    LOGD("scep: expected transactionID: %.*s", (int)(len * 2), hex);
+    scep_hex(hash2, len, hex);
+    LOGD("scep: expected transactionID: %.*s", (int)(len * 2), hex);
 #endif
+
+    if (memcmp(received, hash1, len) && memcmp(received, hash2, len)) {
         return -1;
     }
 

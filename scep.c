@@ -1261,6 +1261,10 @@ struct scep_PKCSReq *scep_PKCSReq_new(
     if (!a->transactionID || !a->messageType || !a->senderNonce) {
         LOGD("scep: PKCSReq: missing contain mandatory attributes");
         return NULL;
+    } else if (a->senderNonce->length != 16) {
+        LOGD("scep: PKCSReq: senderNonce length is non-standard: %d",
+                a->senderNonce->length);
+        /* But continue to proceed */
     }
 
     BIO_get_mem_ptr(m->payload, &bptr);

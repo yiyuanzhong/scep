@@ -14,10 +14,8 @@ ifneq ($(debug),1)
 CPPFLAGS += -DNDEBUG
 CPPFLAGS += -D_FORTIFY_SOURCE=2
 CFLAGS += -O2
-CFLAGS += -fpie
 CFLAGS += -flto
 CFLAGS += -Wstack-protector -fstack-protector-all
-LDFLAGS += -Wl,-pie
 LDFLAGS += -Wl,-z,now
 LDFLAGS += -Wl,-z,defs
 LDFLAGS += -Wl,-z,relro

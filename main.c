@@ -657,6 +657,7 @@ static unsigned int handle_PKIOperation(
 
     m = scep_pkiMessage_new(scep, payload);
     if (!m) {
+        printf("scep: handle_PKIOperation failed to create new scep_pkiMessage_new\n");
         return MHD_HTTP_BAD_REQUEST;
     }
 
@@ -666,6 +667,7 @@ static unsigned int handle_PKIOperation(
         break;
     default:
         scep_pkiMessage_free(m);
+        printf("scep: handle_PKIOperation unknown message type\n");
         return MHD_HTTP_BAD_REQUEST;
     }
 

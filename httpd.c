@@ -1,5 +1,5 @@
 #include "httpd.h"
-
+#include <stdio.h>
 #include <string.h>
 
 #include <errno.h>
@@ -24,7 +24,7 @@ enum MHD_Result { DUMMY };
 #endif
 
 #if MHD_VERSION < 0x00095300
-#define MHD_HTTP_PAYLOAD_TOO_LARGE MHD_HTTP_REQUEST_ENTITY_TOO_LARGE
+#define MHD_HTTP_CONTENT_TOO_LARGE MHD_HTTP_REQUEST_ENTITY_TOO_LARGE
 #endif
 
 #if MHD_VERSION < 0x00093400
@@ -116,7 +116,7 @@ static struct MHD_Response *httpd_create_standard_response(
     case MHD_HTTP_METHOD_NOT_ALLOWED:
         status = "Method Not Allowed";
         break;
-    case MHD_HTTP_PAYLOAD_TOO_LARGE:
+    case MHD_HTTP_CONTENT_TOO_LARGE:
         status = "Payload Too Large";
         break;
     case MHD_HTTP_INTERNAL_SERVER_ERROR:
@@ -165,7 +165,7 @@ static struct MHD_Response *httpd_create_standard_response(
         BIO_printf(bp, " is not allowed for this URL.");
         break;
 
-    case MHD_HTTP_PAYLOAD_TOO_LARGE:
+    case MHD_HTTP_CONTENT_TOO_LARGE:
         BIO_printf(bp, "The requested resource does not allow "
                 "request data with ");
         httpd_html_escape(bp, extra, FALSE);
@@ -354,6 +354,8 @@ static MHD_RESULT httpd_handler(
     (void)url;
     (void)version;
 
+    printf("http: %s request received\n", method);
+
     request = (struct request *)*con_cls;
     if (!request) {
         request = (struct request *)malloc(sizeof(*request));
@@ -398,12 +400,12 @@ static MHD_RESULT httpd_handler(
 
     } else if (request->abandoned) {
         return httpd_standard_response(connection,
-                MHD_HTTP_PAYLOAD_TOO_LARGE,
+                MHD_HTTP_CONTENT_TOO_LARGE,
                 method, TRUE);
     }
 
-    operation = MHD_lookup_connection_value(
-            connection, MHD_GET_ARGUMENT_KIND, "operation");
+    operation = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "operation");
+    printf("http: operation %s\n", operation);
 
     if (!operation || !*operation) {
         return httpd_standard_response(connection,
@@ -431,7 +433,7 @@ static MHD_RESULT httpd_handler(
                 MHD_HTTP_METHOD_NOT_ALLOWED,
                 method, FALSE);
     }
-
+    printf("http: preparing response\n");
     response = BIO_new(BIO_s_mem());
     if (!response) {
         return MHD_NO;
@@ -441,7 +443,7 @@ static MHD_RESULT httpd_handler(
     httpd = (struct httpd *)cls;
     status = httpd->handler(httpd->context, operation,
             request->payload, &rct, response);
-
+    printf("http: status %d\n", status);
     BIO_get_mem_ptr(response, &bptr);
     switch (status) {
     case MHD_HTTP_FOUND:
@@ -544,7 +546,7 @@ int httpd_start(struct httpd *httpd)
     if (!httpd->daemon) {
         return -1;
     }
-
+    printf("http server listening on port %d\n", httpd->port);
     return 0;
 }
 

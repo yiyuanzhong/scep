@@ -1081,9 +1081,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-    OpenSSL_add_all_algorithms();
-#endif
+    if (OpenSSL_initialize()) {
+        return EXIT_FAILURE;
+    }
 
     scep = scep_new(&configure);
     if (!scep) {
@@ -1160,5 +1160,6 @@ int main(int argc, char *argv[])
     httpd_stop(httpd);
     httpd_free(httpd);
     scep_free(scep);
+    OpenSSL_shutdown();
     return ret ? EXIT_FAILURE : EXIT_SUCCESS;
 }

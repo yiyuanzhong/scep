@@ -34,4 +34,7 @@ extern void EVP_MD_CTX_free(EVP_MD_CTX *ctx);
 extern int ASN1_TIME_compare(const ASN1_TIME *a, const ASN1_TIME *b);
 #endif /* OPENSSL_VERSION_NUMBER < 0x10101000L */
 
+extern int OpenSSL_initialize(void);
+extern void OpenSSL_shutdown(void);
+
 #endif /* SCEP_OPENSSL_COMPAT_H */

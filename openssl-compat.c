@@ -3,6 +3,12 @@
 #include <assert.h>
 #include <string.h>
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+static OSSL_PROVIDER *g_provider_legacy;
+static OSSL_PROVIDER *g_provider_default;
+#endif
+
 #define OPENSSL_COMPAT_opaque(OBJECT) \
 OBJECT *OBJECT##_new(void) \
 { \
@@ -60,3 +66,37 @@ int ASN1_TIME_compare(const ASN1_TIME *a, const ASN1_TIME *b)
     return 0;
 }
 #endif /* OPENSSL_VERSION_NUMBER < 0x10101000L */
+
+int OpenSSL_initialize(void)
+{
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+    OpenSSL_add_all_algorithms();
+#endif
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    if (!(g_provider_legacy = OSSL_PROVIDER_load(NULL, "legacy"))) {
+        return -1;
+    }
+
+    if (!(g_provider_default = OSSL_PROVIDER_load(NULL, "default"))) {
+        return -1;
+    }
+#endif
+
+    return 0;
+}
+
+void OpenSSL_shutdown(void)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    if (g_provider_default) {
+        OSSL_PROVIDER_unload(g_provider_default);
+        g_provider_default = NULL;
+    }
+
+    if (g_provider_legacy) {
+        OSSL_PROVIDER_unload(g_provider_legacy);
+        g_provider_legacy = NULL;
+    }
+#endif
+}

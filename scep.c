@@ -1327,7 +1327,6 @@ struct scep_PKCSReq *scep_PKCSReq_new(
     struct scep_PKCSReq *req;
     X509_NAME *subject;
     EVP_PKEY *csrkey;
-    EVP_PKEY *pkey;
     BUF_MEM *bptr;
     X509_REQ *csr;
     int csrbits;
@@ -1369,18 +1368,17 @@ struct scep_PKCSReq *scep_PKCSReq_new(
 
     BIO_free_all(robp);
 
-    if (!(pkey = X509_REQ_get0_pubkey(csr))                         ||
-        (csrbits = scep_get_rsa_key_bits(pkey)) < SCEP_RSA_MIN_BITS ||
-        !(csrkey = X509_REQ_get0_pubkey(csr))                       ||
-        !(subject = X509_REQ_get_subject_name(csr))                 ||
-        X509_NAME_get_index_by_NID(subject, NID_commonName, -1) < 0 ){
+    if (!(csrkey = X509_REQ_get0_pubkey(csr))                         ||
+        !(subject = X509_REQ_get_subject_name(csr))                   ||
+        (csrbits = scep_get_rsa_key_bits(csrkey)) < SCEP_RSA_MIN_BITS ||
+        X509_NAME_get_index_by_NID(subject, NID_commonName, -1) < 0   ){
 
         LOGD("scep: PKCSReq: invalid CSR");
         X509_REQ_free(csr);
         return NULL;
     }
 
-    if (X509_REQ_verify(csr, pkey) != 1) {
+    if (X509_REQ_verify(csr, csrkey) != 1) {
         LOGD("scep: PKCSReq: CSR is not self signed");
         X509_REQ_free(csr);
         return NULL;

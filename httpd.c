@@ -23,8 +23,10 @@ enum MHD_Result { DUMMY };
 #define MHD_RESULT enum MHD_Result
 #endif
 
-#if MHD_VERSION < 0x00095300
-#define MHD_HTTP_PAYLOAD_TOO_LARGE MHD_HTTP_REQUEST_ENTITY_TOO_LARGE
+#if   MHD_VERSION < 0x00095300
+#define MHD_HTTP_CONTENT_TOO_LARGE MHD_HTTP_REQUEST_ENTITY_TOO_LARGE
+#elif MHD_VERSION < 0x00097400
+#define MHD_HTTP_CONTENT_TOO_LARGE MHD_HTTP_PAYLOAD_TOO_LARGE
 #endif
 
 #if MHD_VERSION < 0x00093400
@@ -116,7 +118,7 @@ static struct MHD_Response *httpd_create_standard_response(
     case MHD_HTTP_METHOD_NOT_ALLOWED:
         status = "Method Not Allowed";
         break;
-    case MHD_HTTP_PAYLOAD_TOO_LARGE:
+    case MHD_HTTP_CONTENT_TOO_LARGE:
         status = "Payload Too Large";
         break;
     case MHD_HTTP_INTERNAL_SERVER_ERROR:
@@ -165,7 +167,7 @@ static struct MHD_Response *httpd_create_standard_response(
         BIO_printf(bp, " is not allowed for this URL.");
         break;
 
-    case MHD_HTTP_PAYLOAD_TOO_LARGE:
+    case MHD_HTTP_CONTENT_TOO_LARGE:
         BIO_printf(bp, "The requested resource does not allow "
                 "request data with ");
         httpd_html_escape(bp, extra, FALSE);
@@ -398,7 +400,7 @@ static MHD_RESULT httpd_handler(
 
     } else if (request->abandoned) {
         return httpd_standard_response(connection,
-                MHD_HTTP_PAYLOAD_TOO_LARGE,
+                MHD_HTTP_CONTENT_TOO_LARGE,
                 method, TRUE);
     }
 

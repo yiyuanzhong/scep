@@ -11,6 +11,7 @@
 #include <microhttpd.h>
 
 #include "logger.h"
+#include "utils.h"
 
 #define BOOL int
 #define TRUE   1
@@ -289,47 +290,6 @@ static enum MHD_Result httpd_error(
             TRUE);
 }
 
-static int httpd_base64_decode(const char *input, BIO *bp)
-{
-    unsigned char buffer[1024];
-    size_t len;
-    BIO *bmem;
-    BIO *b64;
-    int ret;
-
-    len = strlen(input);
-    bmem = BIO_new_mem_buf(input, len);
-    if (!bmem) {
-        return -1;
-    }
-
-    b64 = BIO_new(BIO_f_base64());
-    if (!b64) {
-        BIO_free_all(bmem);
-        return -1;
-    }
-
-    b64 = BIO_push(b64, bmem);
-
-    for (;;) {
-        ret = BIO_read(b64, buffer, sizeof(buffer));
-        if (ret < 0) {
-            BIO_free_all(b64);
-            return -1;
-        } else if (ret == 0) {
-            break;
-        }
-
-        if (BIO_write(bp, buffer, ret) != ret) {
-            BIO_free_all(b64);
-            return -1;
-        }
-    }
-
-    BIO_free_all(b64);
-    return 0;
-}
-
 static MHD_RESULT httpd_handler(
         void *cls,
         struct MHD_Connection *connection,
@@ -420,7 +380,7 @@ static MHD_RESULT httpd_handler(
                 connection, MHD_GET_ARGUMENT_KIND, "message");
 
         if (message && *message) {
-            if (httpd_base64_decode(message, request->payload)) {
+            if (utils_base64_decode_bio(message, strlen(message), request->payload)) {
                 return httpd_error(connection, "admin@example.com");
             }
         }

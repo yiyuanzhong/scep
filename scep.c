@@ -20,6 +20,7 @@
 
 #include "logger.h"
 #include "openssl-compat.h"
+#include "utils.h"
 
 #define SCEP_RSA_MIN_BITS 2048
 
@@ -1116,7 +1117,7 @@ static int scep_unhex_one(unsigned char c)
     }
 }
 
-static int scep_unhex(unsigned char *s, unsigned int len, unsigned char *o)
+static int scep_unhex(const unsigned char *s, unsigned int len, unsigned char *o)
 {
     unsigned int i;
     int h;
@@ -1153,57 +1154,124 @@ static void scep_hex(const void *buffer, size_t length, void *output)
 }
 #endif
 
+static int scep_check_transactionID_try(
+        const unsigned char *hash, size_t hlen,
+        const unsigned char *pkey, size_t plen,
+        const EVP_MD *type)
+{
+    unsigned char expected[EVP_MAX_MD_SIZE];
+
+#ifndef NDEBUG
+    unsigned char hex[EVP_MAX_MD_SIZE * 2];
+#endif
+
+    if (EVP_Digest(pkey, plen, expected, NULL, type, NULL) != 1) {
+        return -1;
+    }
+
+#ifndef NDEBUG
+    scep_hex(expected, hlen, hex);
+    LOGD("scep: expected transactionID: %.*s", (int)(hlen * 2), hex);
+#endif
+
+    if (memcmp(expected, hash, hlen)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int scep_check_transactionID_raw(
+        const unsigned char *hash, size_t hlen,
+        const unsigned char *pkey, size_t plen)
+{
+#ifndef NDEBUG
+    unsigned char hex[EVP_MAX_MD_SIZE * 2];
+#endif
+
+#ifndef NDEBUG
+    scep_hex(hash, hlen, hex);
+    LOGD("scep: received transactionID: %.*s", (int)(hlen * 2), hex);
+#endif
+
+    /* There're 2 methods as in RFC5280 and 4 methods as in RFC7093
+     * to generate key identifiers, but I only support 4 simple
+     * methods. If you have any client doing otherwise you
+     * will need to disable transactionID validation.
+     */
+    if (hlen != 20) {
+        return -1;
+    }
+
+    if (scep_check_transactionID_try(hash, 20, pkey, plen, EVP_sha1()  ) &&
+        scep_check_transactionID_try(hash, 20, pkey, plen, EVP_sha256()) &&
+        scep_check_transactionID_try(hash, 20, pkey, plen, EVP_sha384()) &&
+        scep_check_transactionID_try(hash, 20, pkey, plen, EVP_sha512()) ){
+
+        return -1;
+    }
+
+    return 0;
+}
+
+static int scep_check_transactionID_hexdump(
+        const unsigned char *sptr, size_t slen,
+        const unsigned char *pkey, size_t plen)
+{
+    unsigned char hash[EVP_MAX_MD_SIZE];
+
+    if ((slen % 2) || slen / 2 > sizeof(hash)) {
+        return -1;
+    }
+
+    if (scep_unhex(sptr, slen, hash)) {
+        return -1;
+    }
+
+    return scep_check_transactionID_raw(hash, slen / 2, pkey, plen);
+}
+
+static int scep_check_transactionID_base64(
+        const unsigned char *sptr, int slen,
+        const unsigned char *pkey, int plen)
+{
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    ssize_t ret;
+
+    ret = utils_base64_decode(sptr, slen, hash, sizeof(hash));
+    if (ret < 0) {
+        return -1;
+    }
+
+    return scep_check_transactionID_raw(hash, (size_t)ret, pkey, plen);
+}
+
 static int scep_check_transactionID(
         struct scep *scep,
         X509_REQ *csr,
         ASN1_PRINTABLESTRING *transactionID)
 {
-    unsigned char received[EVP_MAX_MD_SIZE];
-    unsigned char hash1[EVP_MAX_MD_SIZE];
-    unsigned char hash2[EVP_MAX_MD_SIZE];
-    const EVP_MD *type;
+    const unsigned char *sptr;
     unsigned char *p;
-    unsigned int len;
     EVP_PKEY *pkey;
+    int slen;
     int ret;
 
-#ifndef NDEBUG
-    char hex[EVP_MAX_MD_SIZE * 2];
-#endif
-
-    if (transactionID->length <= 0) {
+    slen = transactionID->length;
+    sptr = transactionID->data;
+    if (slen <= 0) {
         return -1;
     }
 
+    /* It says printable, I hope so */
+    LOGD("scep: received transactionID: %.*s", slen, sptr);
     if (scep->configure.no_validate_transaction_id) {
         return 0;
     }
 
-    if (transactionID->length % 2) {
-        return -1;
-    }
-
-    len = transactionID->length / 2;
-    if (scep_unhex(transactionID->data, transactionID->length, received)) {
-        return -1;
-    }
-
-#ifndef NDEBUG
-    scep_hex(received, len, hex);
-    LOGD("scep: received transactionID: %.*s", (int)(len * 2), hex);
-#endif
-
     pkey = X509_REQ_get0_pubkey(csr); /* Internal */
     if (!pkey) {
         return -1;
-    }
-
-    switch (len) {
-    case MD5_DIGEST_LENGTH:    type = EVP_md5();    break;
-    case SHA_DIGEST_LENGTH:    type = EVP_sha1();   break;
-    case SHA256_DIGEST_LENGTH: type = EVP_sha256(); break;
-    case SHA512_DIGEST_LENGTH: type = EVP_sha512(); break;
-    default : return -1;
     }
 
     p = NULL;
@@ -1212,38 +1280,18 @@ static int scep_check_transactionID(
         return -1;
     }
 
-    if (EVP_Digest(p, (size_t)ret, hash1, NULL, type, NULL) != 1) {
+    /* Transaction ID shall be a hash of the public key, although the specification
+     * says SHA1 hexdump, there're different implementations out there and we try
+     * to be compatible. */
+
+    if (scep_check_transactionID_hexdump(sptr, (size_t)slen, p, (size_t)ret) &&
+        scep_check_transactionID_base64 (sptr, (size_t)slen, p, (size_t)ret) ){
+
         OPENSSL_free(p);
         return -1;
     }
 
     OPENSSL_free(p);
-    p = NULL;
-
-    ret = i2d_PUBKEY(pkey, &p);
-    if (ret < 0) {
-        return -1;
-    }
-
-    if (EVP_Digest(p, (size_t)ret, hash2, NULL, type, NULL) != 1) {
-        OPENSSL_free(p);
-        return -1;
-    }
-
-    OPENSSL_free(p);
-    p = NULL;
-
-#ifndef NDEBUG
-    scep_hex(hash1, len, hex);
-    LOGD("scep: expected transactionID: %.*s", (int)(len * 2), hex);
-    scep_hex(hash2, len, hex);
-    LOGD("scep: expected transactionID: %.*s", (int)(len * 2), hex);
-#endif
-
-    if (memcmp(received, hash1, len) && memcmp(received, hash2, len)) {
-        return -1;
-    }
-
     return 0;
 }
 

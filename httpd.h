@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <signal.h>
+
 #include <openssl/bio.h>
 
 struct httpd;

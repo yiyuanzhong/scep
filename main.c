@@ -21,7 +21,7 @@
 #include "scep.h"
 
 #ifndef static_assert
-#define static_assert(x) _Static_assert((x), #x)
+#define static_assert _Static_assert
 #endif
 
 struct context {
@@ -37,7 +37,7 @@ struct token {
     uint32_t nonce;
     unsigned char hmac[32];
 };
-static_assert(sizeof(struct token) == 40);
+static_assert(sizeof(struct token) == 40, "sizeof");
 
 static volatile sig_atomic_t g_quit;
 

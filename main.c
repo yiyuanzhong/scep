@@ -51,40 +51,59 @@ static int validate_validity(time_t now, const X509 *x509, long days)
     const ASN1_TIME *when;
     ASN1_TIME *ts;
 
+    ts = ASN1_TIME_new();
+    if (!ts) {
+        return -1;
+    }
+
+    if (!ASN1_TIME_set(ts, now)) {
+        ASN1_TIME_free(ts);
+        return -1;
+    }
+
     when = X509_get0_notBefore(x509);
-    if (ASN1_TIME_cmp_time_t(when, now) > 0) {
-        LOGD("scep: signing certificate is not valid yet");
-        return 0;
+    switch (ASN1_TIME_compare(when, ts)) {
+    case -1: break;
+    case  0: break;
+    case  1: LOGD("scep: signing certificate is not valid yet");
+             ASN1_TIME_free(ts);
+             return 0;
+    default: ASN1_TIME_free(ts);
+             return -1;
     }
 
     when = X509_get0_notAfter(x509);
-    if (ASN1_TIME_cmp_time_t(when, now) < 0) { /* Expired */
-        LOGD("scep: signing certificate has expired already");
-        return 0;
+    switch (ASN1_TIME_compare(when, ts)) {
+    case -1: LOGD("scep: signing certificate has expired already");
+             ASN1_TIME_free(ts);
+             return 0;
+    case  0: break;
+    case  1: break;
+    default: ASN1_TIME_free(ts);
+             return -1;
     }
 
     LOGD("scep: signing certificate is valid");
     if (days > 0) {
-        ts = ASN1_TIME_new();
-        if (!ts) {
-            return -1;
-        }
-
         if (!ASN1_TIME_adj(ts, now, days, 0)) {
             ASN1_TIME_free(ts);
             return -1;
         }
 
-        if (ASN1_TIME_compare(when, ts) > 0) {
-            LOGD("scep: signing certificate is not within renewal window");
-            ASN1_TIME_free(ts);
-            return 0;
+        switch (ASN1_TIME_compare(when, ts)) {
+        case -1: break;
+        case  0: break;
+        case  1: LOGD("scep: signing certificate is not within renewal window");
+                 ASN1_TIME_free(ts);
+                 return 0;
+        default: ASN1_TIME_free(ts);
+                 return -1;
         }
 
-        ASN1_TIME_free(ts);
         LOGD("scep: signing certificate is within renewal window");
     }
 
+    ASN1_TIME_free(ts);
     return 1;
 }
 

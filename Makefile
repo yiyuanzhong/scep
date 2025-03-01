@@ -27,13 +27,16 @@ all: scep
 clean:
 	rm -f scep *.o
 
-scep: main.c.o scep.c.o httpd.c.o logger.c.o
+scep: httpd.c.o logger.c.o main.c.o openssl-compat.c.o scep.c.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-main.c.o: main.c scep.h httpd.h logger.h
+openssl-compat.c.o: openssl-compat.c openssl-compat.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
 
-scep.c.o: scep.c scep.h logger.h
+main.c.o: main.c httpd.h logger.h openssl-compat.h scep.h
+	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
+
+scep.c.o: scep.c scep.h logger.h openssl-compat.h
 	$(CC) -c -o $@ $< $(CPPFLAGS) $(CFLAGS)
 
 httpd.c.o: httpd.c httpd.h logger.h

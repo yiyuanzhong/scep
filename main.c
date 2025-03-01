@@ -18,6 +18,7 @@
 
 #include "httpd.h"
 #include "logger.h"
+#include "openssl-compat.h"
 #include "scep.h"
 
 #ifndef static_assert
@@ -1079,6 +1080,10 @@ int main(int argc, char *argv[])
     if (sigemptyset(&empty) ||initialize_signals()) {
         return EXIT_FAILURE;
     }
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+    OpenSSL_add_all_algorithms();
+#endif
 
     scep = scep_new(&configure);
     if (!scep) {

@@ -19,6 +19,7 @@
 #include <openssl/x509_vfy.h>
 
 #include "logger.h"
+#include "openssl-compat.h"
 
 #define SCEP_RSA_MIN_BITS 2048
 

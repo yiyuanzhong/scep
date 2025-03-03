@@ -11,8 +11,7 @@ Simple Certificate Enrollment Protocol (SCEP) is a widely adopted PKI component 
 * A service with minimal dependencies so I can run it in an embedded container.
 * Certain degree of configurability to interoperate with multiple clients.
 * A dynamic challenge password is intruduced to automate the initial issuance.
-* (TODO) A valid certificate is required to renew the certificates so it's secure over Internet.
-	* I somehow lost some of my last development which supports renewals, I have no choice but to write down what I have in this version. *
+* A valid certificate is required to renew the certificates so it's secure over Internet.
 
 ## Quick start
 You start by getting the signing CA certificate and key, this can be a self-signed root CA or an intermediate CA (which you should have the full chain ready). Only one signing CA is supported, you can however launch multiple instances since it's quite lightweighted.

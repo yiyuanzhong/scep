@@ -60,7 +60,7 @@ Then specify the file by `-e`
 
 ## All command line arguments
 ### Daemon mode
-||Long Argument|Default|Explanation|
+|Arg|Long&nbsp;Argument|Default|Explanation|
 |-|-|-|-|
 |-p|--port=\<port\>|(mandatory)|Listening port.|
 |-c|--ca=\<signca.cer\>|(mandatory)|Signing CA certificate.|
@@ -77,11 +77,11 @@ Then specify the file by `-e`
 |-L|--chainform=\<pem\|der\>|pem|Specify the same number of times as chained CA if needed.|
 |-o|--otherca=\<other.cer\>|(none)|When the client renews its certificate with an existing certificate, the daemon will check if that certificate was issued by the signing CA itself. Specifying additional CA certificates so the client certificate is validated against all of them. The specified CA certificates are formed as a CA store thus every certificate is a trust anchor. Since the client might not provide the whole certificate chain, it's recommended to include all previously active signing CAs so the validation is more stable.|
 |-O|--otherform=\<pem\|der\>|pem|Specify the same number of times as other CA if needed.|
-|-T|--trans_id|(validation enabled)|Disable Transaction ID check in the requests. Note that only a subset of allowed Transaction ID methods (as in RFC5280 and RFC7093) are supported, so you might want to disable this check if you have client requests rejected.|
-|-E|--exposed_cp|(validation enabled)|Challenge passwords shall be encrypted in the inner payload of PKCS/7 envelope otherwise they can be eavesdropped and hijacked. However not all the clients properly implement this requirements and might cause security concerns so by default the daemon will reject such requests. Specifying this argument turns off this check. *NOT RECOMMENDED* |
-|-A|--set_san|(not copying)|CSR can contain Subject Alternative Name (SAN) which can be copied to the newly issued certificates, however such SANs are not protected by challenge passwords and the clients can request any SAN that they want, so by default the daemon will not copy them. Specifying this argument allows such copying.|
+|-T|--trans_id|(enforced)|Disable Transaction ID check in the requests. Note that only a subset of allowed Transaction ID methods (as in RFC5280 and RFC7093) are supported, so you might want to disable this check if you have client requests rejected.|
+|-E|--exposed_cp|(enforced)|Challenge passwords shall be encrypted in the inner payload of PKCS/7 envelope otherwise they can be eavesdropped and hijacked. However not all the clients properly implement this requirements and might cause security concerns so by default the daemon will reject such requests. Specifying this argument turns off this check. *NOT RECOMMENDED* |
+|-A|--set_san|(discarded)|CSR can contain Subject Alternative Name (SAN) which can be copied to the newly issued certificates, however such SANs are not protected by challenge passwords and the clients can request any SAN that they want, so by default the daemon will not copy them. Specifying this argument allows such copying.|
 ### Challenge generation mode
-||Long Argument|Value|Explanation|
+|Arg|Long&nbsp;Argument|Value|Explanation|
 |-|-|-|-|
 |-C|--challenge=\<secret\>|(mandatory)|Password used to generate challenge passwords based on subject, the generated challenge password is valid for 7 days.|
 |-S|--subject=\<subject\>|(mandatory)|X509 subject identifier in the format of `/key=value/key=value`. Example: `/C=AU/ST=Queensland/O=CryptSoft Pty Ltd/CN=Server test cert` |

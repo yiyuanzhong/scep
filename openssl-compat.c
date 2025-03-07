@@ -1,6 +1,7 @@
 #include "openssl-compat.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
@@ -66,6 +67,86 @@ int ASN1_TIME_compare(const ASN1_TIME *a, const ASN1_TIME *b)
     return 0;
 }
 #endif /* OPENSSL_VERSION_NUMBER < 0x10101000L */
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+
+EVP_MAC *EVP_MAC_fetch(
+        void *libctx,
+        const char *algorithm,
+        const char *properties)
+{
+    if (libctx || strcmp(algorithm, "HMAC") || properties) {
+        abort();
+    }
+
+    return (EVP_MAC *)0xdeadbeef;
+}
+
+void EVP_MAC_free(EVP_MAC *mac)
+{
+    (void)mac;
+}
+
+EVP_MAC_CTX *EVP_MAC_CTX_new(EVP_MAC *mac)
+{
+    if (!mac) {
+        abort();
+    }
+
+    return HMAC_CTX_new();
+}
+
+int EVP_MAC_init(
+        EVP_MAC_CTX *ctx,
+        const unsigned char *key,
+        size_t keylen,
+        const OSSL_PARAM params[])
+{
+    const EVP_MD *md;
+    int i;
+
+    md = NULL;
+    for (i = 0; params[i].key; ++i) {
+        if (strcmp(params[i].key, OSSL_MAC_PARAM_DIGEST) == 0) {
+            md = EVP_get_digestbyname(params[i].value);
+        }
+    }
+
+    return HMAC_Init_ex(ctx, key, keylen, md, NULL);
+}
+
+int EVP_MAC_final(
+        EVP_MAC_CTX *ctx,
+        unsigned char *out,
+        size_t *outl,
+        size_t outsize)
+{
+    unsigned int outlen;
+    int ret;
+
+    (void)outsize; /* Take care of yourself */
+    ret = HMAC_Final(ctx, out, &outlen);
+    *outl = outlen;
+    return ret;
+}
+
+OSSL_PARAM OSSL_PARAM_construct_utf8_string(
+        const char *key, char *buf, size_t bsize)
+{
+    OSSL_PARAM value = {.key = key, .value = buf};
+    if (!key || !buf || bsize) {
+        abort();
+    }
+    return value;
+}
+
+OSSL_PARAM OSSL_PARAM_construct_end(void)
+{
+    static const OSSL_PARAM kValue = {.key = NULL, .value = NULL};
+    return kValue;
+}
+
+#endif /* OPENSSL_VERSION_NUMBER < 0x30000000L */
 
 int OpenSSL_initialize(void)
 {

@@ -256,29 +256,43 @@ static int generate_challenge_password(
 {
     unsigned char key[SHA256_DIGEST_LENGTH];
     struct token token;
-    unsigned int hlen;
+    EVP_MAC_CTX *ctx;
     BUF_MEM *bptr;
-    HMAC_CTX *ctx;
+    EVP_MAC *mac;
+    size_t hlen;
     BIO *bp;
+
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, "SHA256", 0),
+        OSSL_PARAM_construct_end()
+    };
 
     if (hash(EVP_sha256(), secret, key)) {
         return -1;
     }
 
-    ctx = HMAC_CTX_new();
+    mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+    if (!mac) {
+        return -1;
+    }
+
+    ctx = EVP_MAC_CTX_new(mac);
     if (!ctx) {
+        EVP_MAC_free(mac);
         return -1;
     }
 
     bp = BIO_new(BIO_s_mem());
     if (!bp) {
-        HMAC_CTX_free(ctx);
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(mac);
         return -1;
     }
 
     if (X509_NAME_print_ex(bp, name, 0, XN_FLAG_RFC2253) == -1) {
         BIO_free_all(bp);
-        HMAC_CTX_free(ctx);
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(mac);
         return -1;
     }
 
@@ -287,19 +301,21 @@ static int generate_challenge_password(
     token.timestamp = timestamp;
     token.nonce = nonce;
 
-    if (HMAC_Init_ex(ctx, key, sizeof(key), EVP_sha256(), NULL) != 1          ||
-        HMAC_Update(ctx, (unsigned char *)&timestamp, sizeof(timestamp)) != 1 ||
-        HMAC_Update(ctx, (unsigned char *)&nonce, sizeof(nonce)) != 1         ||
-        HMAC_Update(ctx, (unsigned char *)bptr->data, bptr->length) != 1      ||
-        HMAC_Final(ctx, token.hmac, &hlen) != 1                               ){
+    if (EVP_MAC_init(ctx, key, sizeof(key), params) != 1                         ||
+        EVP_MAC_update(ctx, (unsigned char *)&timestamp, sizeof(timestamp)) != 1 ||
+        EVP_MAC_update(ctx, (unsigned char *)&nonce, sizeof(nonce)) != 1         ||
+        EVP_MAC_update(ctx, (unsigned char *)bptr->data, bptr->length) != 1      ||
+        EVP_MAC_final(ctx, token.hmac, &hlen, sizeof(token.hmac)) != 1           ){
 
-        HMAC_CTX_free(ctx);
         BIO_free_all(bp);
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(mac);
         return -1;
     }
 
-    HMAC_CTX_free(ctx);
     BIO_free_all(bp);
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac);
 
     hex(&token, sizeof(token), output);
     output[sizeof(token) * 2] = '\0';
@@ -912,6 +928,10 @@ static int main_generate(const char *subject, const char *key)
         return EXIT_FAILURE;
     }
 
+    if (OpenSSL_initialize()) {
+        return EXIT_FAILURE;
+    }
+
     timestamp = (uint32_t)now;
     if (RAND_bytes((unsigned char *)&nonce, sizeof(nonce)) != 1) {
         return EXIT_FAILURE;
@@ -925,6 +945,7 @@ static int main_generate(const char *subject, const char *key)
 
     LOGD("timestamp=%u nonce=%u", timestamp, nonce);
     printf("%s\n", output);
+    OpenSSL_shutdown();
     return EXIT_SUCCESS;
 }
 

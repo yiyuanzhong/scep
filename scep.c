@@ -1628,8 +1628,10 @@ static PKCS7 *scep_pkiMessage_seal(
         struct scep_pkiMessage_attributes *a)
 {
     PKCS7_SIGNER_INFO *si;
+    const EVP_MD *md;
     BIO *content;
     PKCS7 *pkcs7;
+    int nid;
 
     pkcs7 = PKCS7_new();
     if (!pkcs7) {
@@ -1646,7 +1648,14 @@ static PKCS7 *scep_pkiMessage_seal(
         return NULL;
     }
 
-    si = PKCS7_add_signature(pkcs7, signer, signkey, EVP_sha1());
+    nid = X509_get_signature_nid(signer);
+    md = EVP_get_digestbynid(nid);
+    if (!md) {
+        PKCS7_free(pkcs7);
+        return NULL;
+    }
+
+    si = PKCS7_add_signature(pkcs7, signer, signkey, md);
     if (!si) {
         PKCS7_free(pkcs7);
         return NULL;

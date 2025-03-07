@@ -1191,7 +1191,7 @@ static int scep_check_transactionID_raw(
 
 #ifndef NDEBUG
     scep_hex(hash, hlen, hex);
-    LOGD("scep: received transactionID: %.*s", (int)(hlen * 2), hex);
+    LOGD("scep: codified transactionID: %.*s", (int)(hlen * 2), hex);
 #endif
 
     /* There're 2 methods as in RFC5280 and 4 methods as in RFC7093
@@ -1265,7 +1265,7 @@ static int scep_check_transactionID(
 
     /* It says printable, I hope so */
     LOGD("scep: received transactionID: %.*s", slen, sptr);
-    if (scep->configure.no_validate_transaction_id) {
+    if (!scep->configure.validate_transaction_id) {
         return 0;
     }
 

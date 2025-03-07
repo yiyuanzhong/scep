@@ -41,7 +41,7 @@ struct scep_configure { /* memset() to 0 for all default */
     int tolerate_exposed_challenge_password;
 
     /* transactionID is the hash of the pubkey but not always the case */
-    int no_validate_transaction_id;
+    int validate_transaction_id;
 
     /* Copy SAN from CSR to issued certificate */
     int set_subject_alternative_name;

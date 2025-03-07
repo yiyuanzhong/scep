@@ -1065,7 +1065,7 @@ int main(int argc, char *argv[])
 
     ctx.challenge_password = arg_chlg;
     configure.set_subject_alternative_name = san;
-    configure.no_validate_transaction_id = trans_id;
+    configure.validate_transaction_id = trans_id;
     configure.tolerate_exposed_challenge_password = exposed;
 
     if (atoport(arg_port, &port)                 ||

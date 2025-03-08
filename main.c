@@ -769,6 +769,7 @@ static unsigned int handle_PKIOperation(
             }
 
         } else if (challenged < 0) {
+            cp = NULL;
             LOGI("scep: PKCSReq authorized without credential");
             rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
 

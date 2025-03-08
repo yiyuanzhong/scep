@@ -923,7 +923,7 @@ static int main_generate(const char *subject, const char *key)
         return EXIT_FAILURE;
     }
 
-    LOGD("timestamp=%u nonce=%u\n", timestamp, nonce);
+    LOGD("timestamp=%u nonce=%u", timestamp, nonce);
     printf("%s\n", output);
     return EXIT_SUCCESS;
 }

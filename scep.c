@@ -1466,7 +1466,11 @@ static int scep_set_serial(X509 *subject)
         return -1;
     }
 
-    if (BN_pseudo_rand(bn, 159, 0, 0) != 1) {
+    /* X509 serial number was never necessarily unpredictable until the
+     * collision attack in 2007, so we generate cryptographically strong
+     * serial number here. This also avoid a deprecation warning since
+     * OpenSSL 3.0 is we use BN_pseudo_rand(). */
+    if (BN_rand(bn, 159, 0, 0) != 1) {
         BN_free(bn);
         return -1;
     }

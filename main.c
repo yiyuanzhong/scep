@@ -773,6 +773,11 @@ static unsigned int handle_PKIOperation(
             rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
 
         } else {
+            /* Client might present the challenge password again even if
+             * a valid certificate is used, do not link the challenge
+             * password to the newly issued certificate. */
+            cp = NULL;
+
             LOGI("scep: PKCSReq authorized by valid certificate");
             rep = scep_CertRep_new(scep, req, now, ctx->validity_days);
         }

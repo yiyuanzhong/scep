@@ -58,6 +58,33 @@ Then specify the file by `-e`
 ./scep -p 8080 -c signing.pem -k signing.key -e extensions.cnf
 ```
 
+## Requirements of the signing CA certificate
+The daemon requires X509v3 certificate, so if you generate certificate with `openssl x509` you need to specify an extension file so the certificate is V3 instead of V1. The recommended minimum extensions are:
+```
+basicConstraints=critical,CA:TRUE,pathlen:1
+authorityKeyIdentifier=keyid:always
+subjectKeyIdentifier=hash
+```
+This will create the extensions below:
+```
+        X509v3 extensions:
+            X509v3 Basic Constraints: critical
+                CA:TRUE, pathlen:1
+            X509v3 Authority Key Identifier:
+                keyid:D4:D7:5C:12:2E:6F:13:97:33:FA:DE:3B:87:BC:8C:54:84:32:58:7E
+            X509v3 Subject Key Identifier:
+                87:EF:C0:95:80:C5:83:6C:30:69:0B:2A:99:25:8E:0B:39:A5:1D:B0
+```
+Please check what your signing CA extensions are and they are compatible with your certificates to issue. If no extension file is specified by `-e` the daemon will use these builtin extensions:
+```
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=clientAuth
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always
+```
+Note that it requires the signing CA certificate to have keyid in `SubjectKeyIdentifier` or the it will fail to issue certificates as `keyid:always` unsatisfied. This is a recommended security feature, override it by specifying an extension file which doesn't require `authorityKeyIdentifier=keyid:always`.
+
 ## All command line arguments
 ### Daemon mode
 |Arg|Long&nbsp;Argument|Default|Explanation|

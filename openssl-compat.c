@@ -28,9 +28,20 @@ void OBJECT##_free(OBJECT *object) \
 }
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
-EVP_PKEY *X509_get0_pubkey(const X509 *x)
+EVP_PKEY *X509_get0_pubkey(X509 *x)
 {
-    return (x && x->cert_info && x->cert_info->key) ? x->cert_info->key->pkey : NULL;
+    EVP_PKEY *pkey;
+
+    pkey = X509_get_pubkey(x);
+    if (!pkey) {
+        return NULL;
+    }
+
+    /* HACK: OpenSSL 1.0.2 will store a reference inside X509 so
+     *       freeing the returned copy will not destroy the object */
+    assert(pkey->references > 1);
+    EVP_PKEY_free(pkey);
+    return pkey;
 }
 
 EVP_PKEY *X509_REQ_get0_pubkey(X509_REQ *x)

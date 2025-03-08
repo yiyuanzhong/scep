@@ -14,7 +14,7 @@
 
 #define EVP_PKEY_get0_RSA(x) (x->pkey.rsa)
 
-extern EVP_PKEY *X509_get0_pubkey(const X509 *x);
+extern EVP_PKEY *X509_get0_pubkey(X509 *x);         /* HACK: non-const */
 extern EVP_PKEY *X509_REQ_get0_pubkey(X509_REQ *x); /* HACK: non-const */
 #endif /* OPENSSL_VERSION_NUMBER < 0x10100000L */
 

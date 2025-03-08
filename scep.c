@@ -121,7 +121,7 @@ static int scep_get_rsa_key_bits(EVP_PKEY *pkey)
 {
     const BIGNUM *bn;
     const RSA *rsa;
-    int bytes;
+    int bits;
 
     rsa = EVP_PKEY_get0_RSA(pkey);
     if (!rsa) {
@@ -134,12 +134,12 @@ static int scep_get_rsa_key_bits(EVP_PKEY *pkey)
         return -1;
     }
 
-    bytes = BN_num_bytes(bn);
-    if (bytes < 0) {
+    bits = BN_num_bits(bn);
+    if (bits < 0) {
         return -1;
     }
 
-    return bytes * 8;
+    return bits;
 }
 
 struct scep *scep_new(const struct scep_configure *configure)
@@ -1029,7 +1029,16 @@ struct scep_pkiMessage *scep_pkiMessage_new(struct scep *scep, BIO *bp)
         PKCS7_free(pkcs7);
         return NULL;
     } else if (signbits < SCEP_RSA_MIN_BITS) {
-        LOGD("scep: pkiMessage: weak signing key length: %d", signbits);
+        if (signbits + 1 == SCEP_RSA_MIN_BITS) {
+            /* Faulty RSA implementation might fail to correct the off by 1
+             * issue generated from underlying mathematical engine and this
+             * is a hint of need for a client side upgrade so we log it with
+             * different wording. */
+            LOGD("scep: pkiMessage: signing key length off by 1: %d", signbits);
+        } else {
+            LOGD("scep: pkiMessage: weak signing key length: %d", signbits);
+        }
+
         BIO_free_all(wbp);
         PKCS7_free(pkcs7);
         return NULL;

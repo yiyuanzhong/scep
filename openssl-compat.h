@@ -77,6 +77,13 @@ extern OSSL_PARAM OSSL_PARAM_construct_end(void);
 
 #define EVP_PKEY_eq EVP_PKEY_cmp
 
+#define OSSL_PKEY_PARAM_RSA_N "n"
+#define EVP_PKEY_get_base_id EVP_PKEY_base_id
+extern int EVP_PKEY_get_bn_param(
+        EVP_PKEY *pkey, /* HACK: non-const */
+        const char *key_name,
+        BIGNUM **bn);
+
 #else
 #include <openssl/core_names.h>
 #endif /* OPENSSL_VERSION_NUMBER < 0x30000000L */

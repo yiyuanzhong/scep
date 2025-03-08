@@ -119,22 +119,23 @@ static int scep_oid2nid(const char *oid)
 
 static int scep_get_rsa_key_bits(EVP_PKEY *pkey)
 {
-    const BIGNUM *bn;
-    const RSA *rsa;
+    BIGNUM *bn;
     int bits;
 
-    rsa = EVP_PKEY_get0_RSA(pkey);
-    if (!rsa) {
+    if (EVP_PKEY_get_base_id(pkey) != EVP_PKEY_RSA) {
         LOGD("scep: key is not of type RSA");
         return -1;
     }
 
-    bn = RSA_get0_n(rsa);
-    if (!bn) {
+    bn = NULL;
+    if (EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_N, &bn) != 1) {
+        LOGD("scep: failed to get RSA public key");
         return -1;
     }
 
     bits = BN_num_bits(bn);
+    BN_free(bn);
+
     if (bits < 0) {
         return -1;
     }

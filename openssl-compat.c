@@ -81,6 +81,8 @@ int ASN1_TIME_compare(const ASN1_TIME *a, const ASN1_TIME *b)
 
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
 
+#include <openssl/rsa.h>
+
 EVP_MAC *EVP_MAC_fetch(
         void *libctx,
         const char *algorithm,
@@ -155,6 +157,42 @@ OSSL_PARAM OSSL_PARAM_construct_end(void)
 {
     static const OSSL_PARAM kValue = {.key = NULL, .value = NULL};
     return kValue;
+}
+
+int EVP_PKEY_get_bn_param(
+        EVP_PKEY *pkey,
+        const char *key_name,
+        BIGNUM **bn)
+{
+    const BIGNUM *n;
+    const RSA *rsa;
+
+    if (!pkey || strcmp(key_name, OSSL_PKEY_PARAM_RSA_N) || !bn) {
+        return 0;
+    }
+
+    rsa = EVP_PKEY_get0_RSA(pkey);
+    if (!rsa) {
+        return 0;
+    }
+
+    n = RSA_get0_n(rsa);
+    if (!n) {
+        return 0;
+    }
+
+    if (*bn) {
+       if (!BN_copy(*bn, n)) {
+           return 0;
+       }
+    } else {
+       *bn = BN_dup(n);
+       if (!*bn) {
+           return 0;
+       }
+    }
+
+    return 1;
 }
 
 #endif /* OPENSSL_VERSION_NUMBER < 0x30000000L */

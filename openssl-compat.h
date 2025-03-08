@@ -75,6 +75,8 @@ extern OSSL_PARAM OSSL_PARAM_construct_end(void);
 
 #define OSSL_MAC_PARAM_DIGEST "OSSL_MAC_PARAM_DIGEST"
 
+#define EVP_PKEY_eq EVP_PKEY_cmp
+
 #else
 #include <openssl/core_names.h>
 #endif /* OPENSSL_VERSION_NUMBER < 0x30000000L */

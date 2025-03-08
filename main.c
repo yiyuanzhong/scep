@@ -475,7 +475,7 @@ static int check_duplicate(
         return 1;
     }
 
-    if (EVP_PKEY_cmp(pkey, csrkey) != 1) {
+    if (EVP_PKEY_eq(pkey, csrkey) != 1) {
         X509_free(x509);
         return 1;
     }

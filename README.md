@@ -61,7 +61,7 @@ Then specify the file by `-e`
 ## Requirements of the signing CA certificate
 The daemon requires X509v3 certificate, so if you generate certificate with `openssl x509` you need to specify an extension file so the certificate is V3 instead of V1. The recommended minimum extensions are:
 ```
-basicConstraints=critical,CA:TRUE,pathlen:1
+basicConstraints=critical,CA:TRUE,pathlen:0
 authorityKeyIdentifier=keyid:always
 subjectKeyIdentifier=hash
 ```
@@ -69,7 +69,7 @@ This will create the extensions below:
 ```
 X509v3 extensions:
     X509v3 Basic Constraints: critical
-        CA:TRUE, pathlen:1
+        CA:TRUE, pathlen:0
     X509v3 Authority Key Identifier:
         keyid:D4:D7:5C:12:2E:6F:13:97:33:FA:DE:3B:87:BC:8C:54:84:32:58:7E
     X509v3 Subject Key Identifier:
